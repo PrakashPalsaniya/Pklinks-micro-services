@@ -1,0 +1,256 @@
+version: '3.9'
+
+volumes:
+  mongo-data:
+  redis-data:
+
+networks:
+  pklinks-net:
+    driver: bridge
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: pklinks-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+      - ./infra/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    networks:
+      - pklinks-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: pklinks-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - pklinks-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: pklinks-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pklinks}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?RABBITMQ_PASS is required - set it in backend/.env}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    networks:
+      - pklinks-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 15s
+      retries: 5
+      start_period: 30s
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    container_name: pklinks-auth
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./auth-service/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      MONGO_URI: mongodb://mongo:27017/pklinks
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
+    ports:
+      - "${AUTH_PORT:-3001}:3001"
+    networks:
+      - pklinks-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  link-service:
+    build:
+      context: .
+      dockerfile: link-service/Dockerfile
+    container_name: pklinks-link
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./link-service/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      MONGO_URI: mongodb://mongo:27017/pklinks
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
+    ports:
+      - "${LINK_PORT:-3002}:3002"
+    networks:
+      - pklinks-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  redirect-service:
+    build:
+      context: .
+      dockerfile: redirect-service/Dockerfile
+    container_name: pklinks-redirect
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./redirect-service/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      MONGO_URI: mongodb://mongo:27017/pklinks
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
+    ports:
+      - "${REDIRECT_PORT:-3003}:3003"
+    networks:
+      - pklinks-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3003/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  analytics-worker:
+    build:
+      context: .
+      dockerfile: analytics-worker/Dockerfile
+    container_name: pklinks-worker
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./analytics-worker/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      MONGO_URI: mongodb://mongo:27017/pklinks
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
+    networks:
+      - pklinks-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: pklinks-notification
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./notification-service/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
+    networks:
+      - pklinks-net
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  analytics-api:
+    build:
+      context: .
+      dockerfile: analytics-api/Dockerfile
+    container_name: pklinks-analytics
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./analytics-api/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      MONGO_URI: mongodb://mongo:27017/pklinks
+    ports:
+      - "${ANALYTICS_API_PORT:-3005}:3005"
+    networks:
+      - pklinks-net
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3005/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: pklinks-gateway
+    restart: unless-stopped
+    env_file:
+      - ./.env
+      - ./api-gateway/.env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      LINK_SERVICE_URL: http://link-service:3002
+      REDIRECT_SERVICE_URL: http://redirect-service:3003
+      ANALYTICS_API_URL: http://analytics-api:3005
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    networks:
+      - pklinks-net
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      link-service:
+        condition: service_healthy
+      redirect-service:
+        condition: service_healthy
+      analytics-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

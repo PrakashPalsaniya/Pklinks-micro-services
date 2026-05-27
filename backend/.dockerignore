@@ -1,0 +1,21 @@
+# Exclude development dependencies from build context
+node_modules
+*/node_modules
+
+# Exclude environment files (secrets must NEVER enter the image)
+.env
+*/.env
+
+# Exclude logs
+*.log
+*/*.log
+
+# Exclude dev artifacts
+dist/
+*/dist/
+scratch/
+*/scratch/
+
+# Exclude git
+.git
+.gitignore
