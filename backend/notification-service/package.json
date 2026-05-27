@@ -1,0 +1,17 @@
+{
+  "name": "notification-service",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@pklinks/config": "*",
+    "@pklinks/utils": "*",
+    "dotenv": "^16.4.5",
+    "nodemailer": "^8.0.7"
+
+  }
+}
