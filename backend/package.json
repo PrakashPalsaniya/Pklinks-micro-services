@@ -1,0 +1,35 @@
+{
+  "name": "pklinks-backend",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "auth-service",
+    "link-service",
+    "redirect-service",
+    "analytics-worker",
+    "analytics-api",
+    "api-gateway",
+    "notification-service"
+  ],
+  "scripts": {
+    "dev:auth":          "npm run dev --workspace auth-service",
+    "dev:link":          "npm run dev --workspace link-service",
+    "dev:redirect":      "npm run dev --workspace redirect-service",
+    "dev:worker":        "npm run dev --workspace analytics-worker",
+    "dev:analytics":     "npm run dev --workspace analytics-api",
+    "dev:gateway":       "npm run dev --workspace api-gateway",
+    "dev:notification":  "npm run dev --workspace notification-service",
+
+    "start:auth":        "npm run start --workspace auth-service",
+    "start:link":        "npm run start --workspace link-service",
+    "start:redirect":    "npm run start --workspace redirect-service",
+    "start:worker":      "npm run start --workspace analytics-worker",
+    "start:analytics":   "npm run start --workspace analytics-api",
+    "start:gateway":     "npm run start --workspace api-gateway",
+    "start:notification":"npm run start --workspace notification-service"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
+
