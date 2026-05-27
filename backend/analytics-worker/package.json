@@ -1,0 +1,19 @@
+{
+  "name": "analytics-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/worker.js",
+  "scripts": {
+    "dev": "nodemon src/worker.js",
+    "start": "node src/worker.js"
+  },
+  "dependencies": {
+    "@pklinks/config": "*",
+    "@pklinks/utils": "*",
+    "dotenv": "^16.4.5",
+    "geoip-lite": "^1.4.10",
+    "mongoose": "^8.3.0",
+    "ua-parser-js": "^1.0.38"
+  }
+}
+

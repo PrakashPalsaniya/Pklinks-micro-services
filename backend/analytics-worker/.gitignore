@@ -1,0 +1,9 @@
+# analytics-worker — gitignore
+node_modules/
+dist/
+.env
+.env.*
+*.log
+coverage/
+scratch/
+tmp/
