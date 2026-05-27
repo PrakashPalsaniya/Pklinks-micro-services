@@ -1,0 +1,63 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PKLinks Frontend — .gitignore
+# Vite + React project
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Dependencies ───────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+
+# ── Environment & Secrets ──────────────────────────────────────────────────────
+# Vite loads VITE_* vars from these files at build time
+# Never commit these — use .env.example to document what's needed
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+
+
+# ── Build Output ──────────────────────────────────────────────────────────────
+dist/
+build/
+
+
+# ── Vite Cache ────────────────────────────────────────────────────────────────
+.vite/
+
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+
+# ── Testing & Coverage ────────────────────────────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+
+# ── Dev Artifacts ─────────────────────────────────────────────────────────────
+scratch/
+tmp/
+temp/
+*.tmp
+
+
+# ── OS Files ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
