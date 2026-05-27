@@ -1,0 +1,4910 @@
+Backend Code Dump - 2026-04-29 18:36:25
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\.env.example =====
+NODE_ENV=development
+PORT=5004
+FRONTEND_URL=http://localhost:3000
+SHORT_DOMAIN=http://localhost:5002
+JWT_ACCESS_TOKEN_SECRET=change-me-access-secret
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\package.json =====
+{
+  "name": "pklinks-analytics-query",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "pg": "^8.20.0",
+    "zod": "^3.25.67"
+  },
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\app.js =====
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+import { env } from "../../shared/src/config/env.js";
+import { errorHandler, notFoundHandler } from "../../shared/src/middleware/error.middleware.js";
+import healthRoutes from "../../shared/src/routes/health.routes.js";
+import { createRequestLoggerMiddleware } from "../../shared/src/utils/logger.js";
+import analyticsRoutes from "./routes/analytics.routes.js";
+
+export const app = express();
+
+app.set("trust proxy", env.trustProxy);
+app.use(
+  cors({
+    origin: env.frontendUrl,
+    credentials: true
+  })
+);
+app.use(helmet());
+app.use(cookieParser());
+app.use(express.json({ limit: "1mb" }));
+app.use(createRequestLoggerMiddleware({ component: "analytics-query" }));
+
+app.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    name: "PKLinks Analytics Query Service",
+    routes: {
+      detail: "/api/analytics/:code"
+    }
+  });
+});
+
+app.use("/api/health", healthRoutes);
+app.use("/api/analytics", analyticsRoutes);
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\config\env.js =====
+export { env } from "../../../shared/src/config/env.js";
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\controllers\analytics.controller.js =====
+import { getLinkAnalytics } from "../services/analytics.service.js";
+
+export const getAnalytics = async (req, res) => {
+  const analytics = await getLinkAnalytics(req.params.code, req.user.uid);
+
+  res.json({
+    success: true,
+    data: analytics
+  });
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\routes\analytics.routes.js =====
+import { Router } from "express";
+import { getAnalytics } from "../controllers/analytics.controller.js";
+import { authenticate } from "../../../shared/src/middleware/auth.middleware.js";
+import { protectedApiRateLimiter } from "../../../shared/src/middleware/rateLimit.middleware.js";
+import { validateRequest } from "../../../shared/src/middleware/validate.middleware.js";
+import { asyncHandler } from "../../../shared/src/utils/asyncHandler.js";
+import { linkCodeParamsSchema } from "../validation/request.schemas.js";
+
+const router = Router();
+
+router.use(authenticate);
+router.use(protectedApiRateLimiter);
+router.get("/:code", validateRequest({ params: linkCodeParamsSchema }), asyncHandler(getAnalytics));
+
+export default router;
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\server.js =====
+import { app } from "./app.js";
+import { closeDatabase, connectDatabase } from "../../shared/src/config/db.js";
+import { env } from "../../shared/src/config/env.js";
+import { logger } from "../../shared/src/utils/logger.js";
+
+const serverLogger = logger.child({ component: "analytics-query.server" });
+
+const handleListenError = (error) => {
+  if (error?.code === "EADDRINUSE") {
+    serverLogger.error("analytics-query.listen.port_in_use", {
+      port: env.port
+    });
+    process.exit(1);
+    return;
+  }
+
+  serverLogger.error("analytics-query.listen.failed", {
+    port: env.port,
+    error: error?.message || "Unknown error"
+  });
+  process.exit(1);
+};
+
+const startServer = async () => {
+  try {
+    await connectDatabase();
+
+    const server = app.listen(env.port, () => {
+      serverLogger.info("analytics-query.listen.started", {
+        port: env.port
+      });
+    });
+
+    server.on("error", handleListenError);
+  } catch (error) {
+    serverLogger.error("analytics-query.start.failed", {
+      error: error.message
+    });
+    process.exit(1);
+  }
+};
+
+startServer();
+
+const gracefulShutdown = async () => {
+  await closeDatabase();
+  process.exit(0);
+};
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\services\analytics.service.js =====
+import { env } from "../../../shared/src/config/env.js";
+import { AppError } from "../../../shared/src/utils/AppError.js";
+import { ClickEvent } from "../../../shared/src/models/ClickEvent.js";
+import { Url } from "../../../shared/src/models/Url.js";
+
+const DEFAULT_COUNTRY = "Unknown";
+const DEFAULT_BROWSER = "Unknown";
+const DEFAULT_DEVICE = "desktop";
+const DEFAULT_REFERRER = "Direct";
+const DEFAULT_IP = "unknown";
+
+const normalizeBucketInterval = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["1 day", "1 hour"].includes(normalized) ? normalized : "1 day";
+};
+
+const normalizeMetricRows = (rows = [], fallback = DEFAULT_COUNTRY) => rows.map((row) => ({
+  label: String(row.label || "").trim() || fallback,
+  count: Number(row.count || 0)
+}));
+
+const getBucketExpression = () => {
+  const interval = normalizeBucketInterval(env.analyticsQueryBucket);
+
+  return {
+    $dateTrunc: {
+      date: "$clickedAt",
+      unit: interval === "1 hour" ? "hour" : "day",
+      timezone: "UTC"
+    }
+  };
+};
+
+const getBreakdownField = (field) => {
+  if (field === "deviceType") {
+    return "$deviceType";
+  }
+
+  return `$${field}`;
+};
+
+const aggregateBreakdown = async ({ code, field, limit, fallback }) => {
+  const result = await ClickEvent.aggregate([
+    {
+      $match: {
+        code
+      }
+    },
+    {
+      $group: {
+        _id: getBreakdownField(field),
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        label: "$_id",
+        count: 1
+      }
+    },
+    {
+      $sort: {
+        count: -1,
+        label: 1
+      }
+    },
+    {
+      $limit: limit
+    }
+  ]);
+
+  return normalizeMetricRows(result, fallback);
+};
+
+const aggregateChartData = async ({ code, days = 30 }) => {
+  const lookbackDays = Math.max(1, Number(days) || 30);
+  const startDate = new Date();
+
+  startDate.setUTCDate(startDate.getUTCDate() - (lookbackDays - 1));
+  startDate.setUTCHours(0, 0, 0, 0);
+
+  const result = await ClickEvent.aggregate([
+    {
+      $match: {
+        code,
+        clickedAt: {
+          $gte: startDate
+        }
+      }
+    },
+    {
+      $group: {
+        _id: getBucketExpression(),
+        clicks: { $sum: 1 }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        date: "$_id",
+        clicks: 1
+      }
+    },
+    {
+      $sort: {
+        date: 1
+      }
+    }
+  ]);
+
+  return result.map((row) => ({
+    date: row.date,
+    clicks: Number(row.clicks || 0)
+  }));
+};
+
+const fetchRecentClickDocs = async (code, limit = 12) => ClickEvent.find({ code })
+  .sort({ clickedAt: -1 })
+  .limit(Math.max(1, Number(limit) || 12))
+  .select("eventId clickedAt referrer browser deviceType country clientIp")
+  .lean();
+
+export const getLinkAnalytics = async (code, userId) => {
+  const link = await Url.findOne({ code, userId }).lean();
+
+  if (!link) {
+    throw new AppError("Link not found.", 404);
+  }
+
+  const [chartData, countries, devices, referrers, browsers, recentClicks] = await Promise.all([
+    aggregateChartData({ code }),
+    aggregateBreakdown({ code, field: "country", limit: 5, fallback: DEFAULT_COUNTRY }),
+    aggregateBreakdown({ code, field: "deviceType", limit: 5, fallback: DEFAULT_DEVICE }),
+    aggregateBreakdown({ code, field: "referrer", limit: 5, fallback: DEFAULT_REFERRER }),
+    aggregateBreakdown({ code, field: "browser", limit: 5, fallback: DEFAULT_BROWSER }),
+    fetchRecentClickDocs(code)
+  ]);
+
+  return {
+    link,
+    overview: {
+      totalClicks: Number(link.clickCount || 0),
+      lastClickedAt: link.lastClickedAt || null
+    },
+    chartData,
+    countries,
+    devices,
+    referrers,
+    browsers,
+    recentClicks: recentClicks.map((click) => ({
+      id: click.eventId || String(click._id),
+      occurredAt: click.clickedAt,
+      referrer: click.referrer || DEFAULT_REFERRER,
+      browser: click.browser || DEFAULT_BROWSER,
+      deviceType: click.deviceType || DEFAULT_DEVICE,
+      country: click.country || DEFAULT_COUNTRY,
+      clientIp: click.clientIp || DEFAULT_IP
+    }))
+  };
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-query\src\validation\request.schemas.js =====
+import { z } from "zod";
+
+const trimString = (value) => (typeof value === "string" ? value.trim() : value);
+
+export const linkCodeParamsSchema = z.object({
+  code: z.preprocess(
+    trimString,
+    z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, "Invalid link code.")
+  )
+}).strict();
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\.env.example =====
+NODE_ENV=development
+MONGODB_URI=mongodb://127.0.0.1:27017/pklinks
+REDIS_URL=redis://127.0.0.1:6379
+ANALYTICS_RETENTION_DAYS=90
+ANALYTICS_WORKER_CONCURRENCY=10
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\package.json =====
+{
+  "name": "pklinks-analytics-worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "bullmq": "^5.41.4",
+    "mongoose": "^8.14.1"
+  },
+  "scripts": {
+    "dev": "nodemon src/worker.js",
+    "start": "node src/worker.js"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\jobs\clickEventProcessor.js =====
+import { createHash } from "crypto";
+import { Url } from "../models/Url.js";
+import { resolveCountry } from "../services/country.service.js";
+import { recordAnalyticsClick } from "../services/clickAnalytics.service.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+
+const analyticsLogger = logger.child({ component: "analytics.processor" });
+
+const buildLegacyEventId = (payload) => createHash("sha1")
+  .update(
+    [
+      payload.code || "",
+      payload.occurredAt ? new Date(payload.occurredAt).toISOString() : "",
+      payload.referrer || "",
+      payload.browser || "",
+      payload.deviceType || "",
+      payload.country || "",
+      payload.clientIp || ""
+    ].join("|")
+  )
+  .digest("hex");
+
+const getEventId = (payload) => payload.eventId || buildLegacyEventId(payload);
+
+const resolveAnalyticsContext = async (payload, eventId) => ({
+  occurredAt: payload.occurredAt ? new Date(payload.occurredAt) : new Date(),
+  referrer: payload.referrer || "Direct",
+  browser: payload.browser || "Unknown",
+  deviceType: payload.deviceType || "desktop",
+  country: await resolveCountry({
+    country: payload.country,
+    clientIp: payload.clientIp,
+    requestId: payload.requestId,
+    eventId,
+    code: payload.code
+  }),
+  clientIp: payload.clientIp || "unknown"
+});
+
+export const processClickEvent = async (payload) => {
+  const eventId = getEventId(payload);
+  const requestLogger = analyticsLogger.child({
+    eventId,
+    code: payload.code,
+    requestId: payload.requestId
+  });
+
+  requestLogger.debug("analytics.process.started");
+
+  try {
+    const context = await resolveAnalyticsContext(payload, eventId);
+    const urlRecord = await Url.findOne({ code: payload.code }).select("_id code userId");
+
+    if (!urlRecord) {
+      requestLogger.warn("analytics.process.url_missing");
+      return;
+    }
+
+    const inserted = await recordAnalyticsClick({
+      eventId,
+      code: urlRecord.code,
+      userId: urlRecord.userId,
+      occurredAt: context.occurredAt,
+      referrer: context.referrer,
+      browser: context.browser,
+      deviceType: context.deviceType,
+      country: context.country,
+      clientIp: context.clientIp,
+      requestId: payload.requestId
+    });
+
+    if (!inserted) {
+      requestLogger.debug("analytics.process.duplicate_event_skipped", {
+        occurredAt: context.occurredAt
+      });
+      return;
+    }
+
+    await Url.updateOne(
+      { _id: urlRecord._id },
+      {
+        $inc: { clickCount: 1 },
+        $max: { lastClickedAt: context.occurredAt }
+      }
+    );
+
+    requestLogger.debug("analytics.mongo.updated", {
+      occurredAt: context.occurredAt
+    });
+    requestLogger.debug("analytics.process.completed");
+  } catch (error) {
+    requestLogger.error("analytics.process.failed", {
+      error
+    });
+    throw error;
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\models\Url.js =====
+import mongoose from "mongoose";
+
+const urlSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    longUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    normalizedUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: 80
+    },
+    userId: {
+      type: String,
+      required: true,
+      index: true
+    },
+    userEmail: {
+      type: String,
+      trim: true
+    },
+    customAlias: {
+      type: Boolean,
+      default: false
+    },
+    expiry: {
+      type: Date,
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    clickCount: {
+      type: Number,
+      default: 0
+    },
+    lastClickedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+urlSchema.index({ userId: 1, createdAt: -1 });
+
+export const Url = mongoose.models.Url || mongoose.model("Url", urlSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\services\analyticsQueue.service.js =====
+import { randomUUID } from "crypto";
+import { Queue, Worker } from "bullmq";
+import { env } from "../../../shared/src/config/env.js";
+import { createBullMqRedisConnection, isRedisEnabled } from "../../../shared/src/config/redis.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+import { processClickEvent } from "../jobs/clickEventProcessor.js";
+
+let clickQueue = null;
+let clickWorker = null;
+let workerReadyLogged = false;
+let queueUnavailableLogged = false;
+let workerConnectionIssueLogged = false;
+let queueConnection = null;
+let workerConnection = null;
+
+const analyticsLogger = logger.child({ component: "analytics.queue" });
+const INLINE_FALLBACK_ATTEMPTS = 3;
+
+const isTransientWorkerConnectionError = (error) => {
+  const message = error?.message || "";
+  return (
+    ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"].includes(error?.code)
+    || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Connection is closed|socket closed unexpectedly|Stream isn't writeable/i.test(message)
+  );
+};
+
+const formatWorkerError = (error) => {
+  if (!error) {
+    return "Unknown worker error";
+  }
+
+  return error.code ? `${error.code}: ${error.message}` : error.message;
+};
+
+const normalizeAnalyticsPayload = (payload) => ({
+  ...payload,
+  eventId: payload?.eventId || randomUUID()
+});
+
+const delay = (delayMs) => new Promise((resolve) => {
+  setTimeout(resolve, delayMs);
+});
+
+const closeRedisClient = async (client) => {
+  if (!client) {
+    return;
+  }
+
+  try {
+    await client.quit();
+  } catch (_error) {
+    try {
+      client.disconnect(false);
+    } catch (_disconnectError) {
+      // no-op
+    }
+  }
+};
+
+const ensureClickQueue = () => {
+  if (clickQueue) {
+    return clickQueue;
+  }
+
+  if (!isRedisEnabled()) {
+    if (!queueUnavailableLogged) {
+      analyticsLogger.warn("analytics.queue.redis_unavailable");
+      queueUnavailableLogged = true;
+    }
+    return null;
+  }
+
+  try {
+    queueConnection = createBullMqRedisConnection();
+    clickQueue = new Queue("click-events", {
+      connection: queueConnection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 100,
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 1000
+        }
+      }
+    });
+
+    analyticsLogger.info("analytics.queue.initialized", {
+      queueName: "click-events"
+    });
+    queueUnavailableLogged = false;
+
+    return clickQueue;
+  } catch (error) {
+    void closeRedisClient(queueConnection);
+    queueConnection = null;
+    analyticsLogger.warn("analytics.queue.bootstrap_failed", {
+      error: formatWorkerError(error)
+    });
+    return null;
+  }
+};
+
+const runInlineFallback = (analyticsPayload, requestLogger, reason) => {
+  setImmediate(async () => {
+    for (let attempt = 1; attempt <= INLINE_FALLBACK_ATTEMPTS; attempt += 1) {
+      try {
+        await processClickEvent(analyticsPayload);
+        requestLogger.debug("analytics.inline.succeeded", {
+          reason,
+          attempt
+        });
+        return;
+      } catch (error) {
+        requestLogger.error("analytics.inline.failed", {
+          reason,
+          attempt,
+          error: formatWorkerError(error)
+        });
+
+        if (attempt < INLINE_FALLBACK_ATTEMPTS) {
+          await delay(attempt * 1000);
+        }
+      }
+    }
+
+    requestLogger.error("analytics.inline.permanently_failed", {
+      reason,
+      attempts: INLINE_FALLBACK_ATTEMPTS
+    });
+  });
+};
+
+export const enqueueClickEvent = async (payload) => {
+  const analyticsPayload = normalizeAnalyticsPayload(payload);
+  const requestLogger = analyticsLogger.child({
+    eventId: analyticsPayload.eventId,
+    code: analyticsPayload.code,
+    requestId: analyticsPayload.requestId
+  });
+  const queue = ensureClickQueue();
+
+  if (!queue) {
+    requestLogger.warn("analytics.queue.unavailable_inline_fallback");
+    runInlineFallback(analyticsPayload, requestLogger, "queue_unavailable");
+    return;
+  }
+
+  try {
+    await queue.add("track-click", analyticsPayload, {
+      jobId: analyticsPayload.eventId
+    });
+    requestLogger.debug("analytics.queue.add_succeeded");
+  } catch (error) {
+    requestLogger.warn("analytics.queue.add_failed_inline_fallback", {
+      error: formatWorkerError(error)
+    });
+    runInlineFallback(analyticsPayload, requestLogger, "queue_add_failed");
+  }
+};
+
+export const startAnalyticsWorker = () => {
+  const queue = ensureClickQueue();
+
+  if (!queue || clickWorker) {
+    analyticsLogger.debug("analytics.worker.start_skipped", {
+      hasQueue: Boolean(queue),
+      alreadyStarted: Boolean(clickWorker)
+    });
+    return;
+  }
+
+  try {
+    workerConnection = createBullMqRedisConnection();
+    clickWorker = new Worker(
+      "click-events",
+      async (job) => {
+        const jobLogger = analyticsLogger.child({
+          jobId: job.id,
+          eventId: job.data?.eventId,
+          code: job.data?.code,
+          requestId: job.data?.requestId
+        });
+        const lagMs = Math.max(Date.now() - Number(job.timestamp || Date.now()), 0);
+
+        jobLogger.debug("analytics.job.started", {
+          lagMs
+        });
+        await processClickEvent(job.data);
+        jobLogger.debug("analytics.job.completed");
+      },
+      {
+        connection: workerConnection,
+        concurrency: env.analyticsWorkerConcurrency
+      }
+    );
+  } catch (error) {
+    void closeRedisClient(workerConnection);
+    workerConnection = null;
+    clickWorker = null;
+    analyticsLogger.warn("analytics.worker.bootstrap_failed", {
+      error: formatWorkerError(error)
+    });
+    return;
+  }
+
+  clickWorker.on("ready", () => {
+    workerConnectionIssueLogged = false;
+
+    if (workerReadyLogged) {
+      analyticsLogger.info("analytics.worker.reconnected");
+      return;
+    }
+
+    workerReadyLogged = true;
+    analyticsLogger.info("analytics.worker.ready", {
+      concurrency: env.analyticsWorkerConcurrency
+    });
+  });
+
+  clickWorker.on("failed", (job, error) => {
+    analyticsLogger.error("analytics.job.failed", {
+      jobId: job?.id || "unknown",
+      eventId: job?.data?.eventId,
+      code: job?.data?.code,
+      requestId: job?.data?.requestId,
+      error: formatWorkerError(error)
+    });
+  });
+
+  clickWorker.on("error", (error) => {
+    if (isTransientWorkerConnectionError(error)) {
+      if (!workerConnectionIssueLogged) {
+        analyticsLogger.warn("analytics.worker.redis_connection_reset", {
+          error: formatWorkerError(error)
+        });
+        workerConnectionIssueLogged = true;
+      }
+      return;
+    }
+
+    analyticsLogger.error("analytics.worker.error", {
+      error: formatWorkerError(error)
+    });
+  });
+};
+
+export const stopAnalyticsWorker = async () => {
+  const closingTasks = [];
+
+  if (clickWorker) {
+    closingTasks.push(clickWorker.close());
+    clickWorker = null;
+  }
+
+  if (clickQueue) {
+    closingTasks.push(clickQueue.close());
+    clickQueue = null;
+  }
+
+  if (workerConnection) {
+    closingTasks.push(closeRedisClient(workerConnection));
+    workerConnection = null;
+  }
+
+  if (queueConnection) {
+    closingTasks.push(closeRedisClient(queueConnection));
+    queueConnection = null;
+  }
+
+  workerReadyLogged = false;
+  queueUnavailableLogged = false;
+  workerConnectionIssueLogged = false;
+
+  await Promise.allSettled(closingTasks);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\services\clickAnalytics.service.js =====
+import { ClickEvent } from "../../../shared/src/models/ClickEvent.js";
+import { AppError } from "../../../shared/src/utils/AppError.js";
+
+const DEFAULT_COUNTRY = "Unknown";
+const DEFAULT_BROWSER = "Unknown";
+const DEFAULT_DEVICE = "desktop";
+const DEFAULT_REFERRER = "Direct";
+const DEFAULT_IP = "unknown";
+
+export const recordAnalyticsClick = async ({
+  eventId,
+  code,
+  userId,
+  occurredAt,
+  referrer,
+  browser,
+  deviceType,
+  country,
+  clientIp,
+  requestId
+}) => {
+  if (!eventId) {
+    throw new AppError("eventId is required.", 400);
+  }
+
+  try {
+    await ClickEvent.create({
+      eventId,
+      code,
+      userId: userId || null,
+      clickedAt: occurredAt,
+      referrer: referrer || DEFAULT_REFERRER,
+      browser: browser || DEFAULT_BROWSER,
+      deviceType: deviceType || DEFAULT_DEVICE,
+      country: country || DEFAULT_COUNTRY,
+      clientIp: clientIp || DEFAULT_IP,
+      requestId: requestId || null
+    });
+
+    return true;
+  } catch (error) {
+    if (error?.code === 11000) {
+      return false;
+    }
+
+    throw error;
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\services\country.service.js =====
+import http from "node:http";
+import https from "node:https";
+import { env } from "../../../shared/src/config/env.js";
+import { redis } from "../../../shared/src/config/redis.js";
+import { normalizeCountryLabel } from "../../../shared/src/services/country.service.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+
+const countryLogger = logger.child({ component: "country" });
+const COUNTRY_CACHE_PREFIX = "pklinks:country:";
+const UNKNOWN_COUNTRY = "Unknown";
+const countryLookupCircuitState = {
+  consecutiveFailures: 0,
+  openedAt: 0,
+  nextAttemptAt: 0
+};
+const getCountryCacheKey = (ip) => `${COUNTRY_CACHE_PREFIX}${ip}`;
+
+const requestJson = (url, timeoutMs) => new Promise((resolve, reject) => {
+  const targetUrl = new URL(url);
+  const transport = targetUrl.protocol === "https:" ? https : http;
+  const request = transport.request(
+    targetUrl,
+    {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "user-agent": "PKLinks/1.0"
+      }
+    },
+    (response) => {
+      let body = "";
+
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        const responseBody = String(body || "").trim();
+
+        if (!responseBody) {
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            status: response.statusCode || 0,
+            payload: null
+          });
+          return;
+        }
+
+        try {
+          resolve({
+            ok: response.statusCode >= 200 && response.statusCode < 300,
+            status: response.statusCode || 0,
+            payload: JSON.parse(responseBody)
+          });
+        } catch (error) {
+          reject(new Error(`Invalid JSON response from country lookup service: ${error.message}`));
+        }
+      });
+    }
+  );
+
+  request.setTimeout(timeoutMs, () => {
+    request.destroy(new Error("Lookup timed out"));
+  });
+
+  request.on("error", reject);
+  request.end();
+});
+
+const normalizeClientIp = (value) => {
+  const rawValue = String(value || "").trim();
+
+  if (!rawValue) {
+    return "";
+  }
+
+  const firstValue = rawValue.split(",")[0].trim();
+  const withoutIpv6Prefix = firstValue.replace(/^::ffff:/i, "");
+
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(withoutIpv6Prefix)) {
+    return withoutIpv6Prefix.replace(/:\d+$/, "");
+  }
+
+  return withoutIpv6Prefix;
+};
+
+const isPrivateIpv4 = (ip) => {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+    return false;
+  }
+
+  const parts = ip.split(".").map(Number);
+  const [first, second] = parts;
+
+  return (
+    first === 10
+    || first === 127
+    || first === 0
+    || (first === 192 && second === 168)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 169 && second === 254)
+  );
+};
+
+const isPrivateIp = (ip) => {
+  const normalized = normalizeClientIp(ip).toLowerCase();
+
+  if (!normalized || normalized === "unknown" || normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+
+  if (isPrivateIpv4(normalized)) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("fc")
+    || normalized.startsWith("fd")
+    || normalized.startsWith("fe80:")
+  );
+};
+
+const readCountryFromCache = async (ip) => {
+  if (!redis) {
+    return null;
+  }
+
+  try {
+    return await redis.get(getCountryCacheKey(ip));
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeCountryToCache = async (ip, country) => {
+  if (!redis) {
+    return;
+  }
+
+  try {
+    await redis.set(getCountryCacheKey(ip), country, "EX", env.countryCacheTtlSeconds);
+  } catch (_error) {
+    // Ignore cache write failures for country enrichment.
+  }
+};
+
+const isCountryLookupCircuitOpen = () => (
+  countryLookupCircuitState.nextAttemptAt > 0
+  && Date.now() < countryLookupCircuitState.nextAttemptAt
+);
+
+const resetCountryLookupCircuit = () => {
+  countryLookupCircuitState.consecutiveFailures = 0;
+  countryLookupCircuitState.openedAt = 0;
+  countryLookupCircuitState.nextAttemptAt = 0;
+};
+
+const recordCountryLookupFailure = (requestLogger, details = {}) => {
+  countryLookupCircuitState.consecutiveFailures += 1;
+
+  if (countryLookupCircuitState.consecutiveFailures < env.countryLookupCircuitBreakerFailures) {
+    return;
+  }
+
+  countryLookupCircuitState.openedAt = Date.now();
+  countryLookupCircuitState.nextAttemptAt = countryLookupCircuitState.openedAt + env.countryLookupCircuitBreakerResetMs;
+
+  requestLogger.warn("country.lookup.circuit_opened", {
+    consecutiveFailures: countryLookupCircuitState.consecutiveFailures,
+    resetAfterMs: env.countryLookupCircuitBreakerResetMs,
+    ...details
+  });
+};
+
+const recordCountryLookupSuccess = () => {
+  if (
+    countryLookupCircuitState.consecutiveFailures > 0
+    || countryLookupCircuitState.nextAttemptAt > 0
+    || countryLookupCircuitState.openedAt > 0
+  ) {
+    resetCountryLookupCircuit();
+  }
+};
+
+const fetchCountryFromLookupService = async (ip, context = {}) => {
+  const requestLogger = countryLogger.child({ ip, ...context });
+  const lookupUrl = env.countryLookupUrlTemplate.replace("{ip}", encodeURIComponent(ip));
+
+  if (isCountryLookupCircuitOpen()) {
+    requestLogger.warn("country.lookup.circuit_open", {
+      consecutiveFailures: countryLookupCircuitState.consecutiveFailures,
+      retryInMs: Math.max(countryLookupCircuitState.nextAttemptAt - Date.now(), 0)
+    });
+    return UNKNOWN_COUNTRY;
+  }
+
+  try {
+    const response = await requestJson(lookupUrl, env.countryLookupTimeoutMs);
+
+    if (!response.ok) {
+      requestLogger.warn("country.lookup.failed", {
+        statusCode: response.status,
+        response: response.payload
+      });
+      recordCountryLookupFailure(requestLogger, {
+        statusCode: response.status
+      });
+      return UNKNOWN_COUNTRY;
+    }
+
+    const payload = response.payload;
+    const country = normalizeCountryLabel(
+      payload?.country
+      || payload?.country_name
+      || payload?.countryName
+      || payload?.country_code
+      || payload?.countryCode
+    );
+
+    if (country === UNKNOWN_COUNTRY) {
+      requestLogger.debug("country.lookup.empty");
+      return UNKNOWN_COUNTRY;
+    }
+
+    requestLogger.debug("country.lookup.success", {
+      country
+    });
+    recordCountryLookupSuccess();
+    return country;
+  } catch (error) {
+    requestLogger.warn("country.lookup.failed", {
+      error: error?.message || error
+    });
+    recordCountryLookupFailure(requestLogger, {
+      error: error?.message || error
+    });
+    return UNKNOWN_COUNTRY;
+  }
+};
+
+export const resolveCountry = async ({ country, clientIp, ...context } = {}) => {
+  const normalizedCountry = normalizeCountryLabel(country);
+
+  if (normalizedCountry !== UNKNOWN_COUNTRY) {
+    return normalizedCountry;
+  }
+
+  if (!env.countryLookupEnabled) {
+    return UNKNOWN_COUNTRY;
+  }
+
+  const normalizedIp = normalizeClientIp(clientIp);
+
+  if (!normalizedIp || (!env.countryLookupAllowPrivate && isPrivateIp(normalizedIp))) {
+    return UNKNOWN_COUNTRY;
+  }
+
+  const cachedCountry = normalizeCountryLabel(await readCountryFromCache(normalizedIp));
+
+  if (cachedCountry !== UNKNOWN_COUNTRY) {
+    countryLogger.debug("country.cache.hit", {
+      ip: normalizedIp,
+      country: cachedCountry,
+      ...context
+    });
+    return cachedCountry;
+  }
+
+  const lookedUpCountry = await fetchCountryFromLookupService(normalizedIp, context);
+
+  if (lookedUpCountry !== UNKNOWN_COUNTRY) {
+    await writeCountryToCache(normalizedIp, lookedUpCountry);
+  }
+
+  return lookedUpCountry;
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\analytics-worker\src\worker.js =====
+import { closeDatabase, connectDatabase } from "../../shared/src/config/db.js";
+import { ensureRedisConnection, quitRedisConnection } from "../../shared/src/config/redis.js";
+import { startAnalyticsWorker, stopAnalyticsWorker } from "./services/analyticsQueue.service.js";
+import { logger } from "../../shared/src/utils/logger.js";
+
+const workerLogger = logger.child({ component: "analytics-worker" });
+
+const startWorkerProcess = async () => {
+  try {
+    await connectDatabase();
+    const redisAvailable = await ensureRedisConnection();
+
+    if (!redisAvailable) {
+      workerLogger.warn("analytics-worker.redis.unavailable");
+      return;
+    }
+
+    startAnalyticsWorker();
+    workerLogger.info("analytics-worker.started");
+  } catch (error) {
+    workerLogger.error("analytics-worker.start.failed", {
+      error: error.message
+    });
+    process.exit(1);
+  }
+};
+
+startWorkerProcess();
+
+const gracefulShutdown = async () => {
+  await stopAnalyticsWorker();
+  await closeDatabase();
+  await quitRedisConnection();
+  process.exit(0);
+};
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\.env.example =====
+NODE_ENV=development
+PORT=5002
+FRONTEND_URL=http://localhost:3000
+TRUST_PROXY=1
+LINK_SERVICE_URL=http://localhost:5003
+ANALYTICS_QUERY_SERVICE_URL=http://localhost:5004
+REDIRECT_SERVICE_URL=http://localhost:5005
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\package.json =====
+{
+  "name": "pklinks-gateway",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0"
+  },
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\src\app.js =====
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+import { errorHandler, notFoundHandler } from "../../shared/src/middleware/error.middleware.js";
+import { createRequestLoggerMiddleware } from "../../shared/src/utils/logger.js";
+import { env } from "./env.js";
+import { forwardRequest } from "./httpProxy.js";
+
+export const app = express();
+
+app.set("trust proxy", env.trustProxy);
+app.use(
+  cors({
+    origin: env.frontendUrl,
+    credentials: true
+  })
+);
+app.use(helmet());
+app.use(express.json({ limit: "1mb" }));
+app.use(createRequestLoggerMiddleware({ component: "gateway" }));
+
+app.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    name: "PKLinks API Gateway",
+    routes: {
+      auth: "/api/auth/me",
+      links: "/api/links",
+      analytics: "/api/analytics/:code",
+      redirect: "/r/:code"
+    },
+    upstreams: {
+      linkService: env.linkServiceUrl,
+      analyticsQueryService: env.analyticsQueryServiceUrl,
+      redirectService: env.redirectServiceUrl
+    }
+  });
+});
+
+app.get("/api/health", (_req, res) => {
+  res.json({
+    success: true,
+    message: "PKLinks gateway is healthy",
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.use("/api/auth", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.linkServiceUrl,
+      targetPath: `/api/auth${req.path}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/links/:code/analytics", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.analyticsQueryServiceUrl,
+      targetPath: `/api/analytics/${req.params.code}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use("/api/links", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.linkServiceUrl,
+      targetPath: `/api/links${req.path}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use("/api/analytics", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.analyticsQueryServiceUrl,
+      targetPath: `/api/analytics${req.path}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use("/api/redirect", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.redirectServiceUrl,
+      targetPath: `/api/redirect${req.path}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use("/r", async (req, res, next) => {
+  try {
+    await forwardRequest({
+      req,
+      res,
+      targetBaseUrl: env.redirectServiceUrl,
+      targetPath: `/r${req.path}`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\src\env.js =====
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const getOptionalEnv = (key, fallback = "") => {
+  const value = process.env[key] ?? fallback;
+
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return String(value).trim();
+};
+
+const getTrustProxyEnv = () => {
+  const value = process.env.TRUST_PROXY;
+
+  if (value === undefined || value === "") {
+    return 1;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  const numericValue = Number(value);
+  return Number.isNaN(numericValue) ? value : numericValue;
+};
+
+export const env = {
+  nodeEnv: process.env.NODE_ENV || "development",
+  port: Number(process.env.PORT || 5002),
+  frontendUrl: getOptionalEnv("FRONTEND_URL", "http://localhost:3000"),
+  trustProxy: getTrustProxyEnv(),
+  linkServiceUrl: getOptionalEnv("LINK_SERVICE_URL", "http://localhost:5003"),
+  analyticsQueryServiceUrl: getOptionalEnv("ANALYTICS_QUERY_SERVICE_URL", "http://localhost:5004"),
+  redirectServiceUrl: getOptionalEnv("REDIRECT_SERVICE_URL", "http://localhost:5005")
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\src\httpProxy.js =====
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
+
+const getRequestBody = (req) => {
+  if (req.method === "GET" || req.method === "HEAD") {
+    return undefined;
+  }
+
+  if (req.body === undefined || req.body === null) {
+    return undefined;
+  }
+
+  return JSON.stringify(req.body);
+};
+
+const copyResponseHeaders = (sourceHeaders, res) => {
+  const setCookies = typeof sourceHeaders.getSetCookie === "function"
+    ? sourceHeaders.getSetCookie()
+    : [];
+
+  if (setCookies.length > 0) {
+    res.setHeader("set-cookie", setCookies);
+  }
+
+  sourceHeaders.forEach((value, key) => {
+    if (
+      key.toLowerCase() !== "set-cookie"
+      && !HOP_BY_HOP_HEADERS.has(key.toLowerCase())
+    ) {
+      res.setHeader(key, value);
+    }
+  });
+};
+
+const sendGenericUpstreamError = (res) => {
+  res.removeHeader("content-length");
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.send(JSON.stringify({
+    success: false,
+    message: "Internal server error.",
+    details: null
+  }));
+};
+
+const buildForwardHeaders = (req, hasBody) => {
+  const headers = new Headers();
+  const forwardedFor = req.get("x-forwarded-for");
+
+  if (req.get("accept")) {
+    headers.set("accept", req.get("accept"));
+  }
+
+  if (req.get("authorization")) {
+    headers.set("authorization", req.get("authorization"));
+  }
+
+  if (req.get("cookie")) {
+    headers.set("cookie", req.get("cookie"));
+  }
+
+  if (req.get("user-agent")) {
+    headers.set("user-agent", req.get("user-agent"));
+  }
+
+  if (req.requestId) {
+    headers.set("x-request-id", req.requestId);
+  }
+
+  headers.set(
+    "x-forwarded-for",
+    forwardedFor ? `${forwardedFor}, ${req.ip || "unknown"}` : req.ip || "unknown"
+  );
+  headers.set("x-forwarded-host", req.get("host") || "");
+  headers.set("x-forwarded-proto", req.protocol || "http");
+
+  if (hasBody) {
+    headers.set("content-type", "application/json");
+  }
+
+  return headers;
+};
+
+export const forwardRequest = async ({
+  req,
+  res,
+  targetBaseUrl,
+  targetPath = req.path,
+  search = req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : ""
+}) => {
+  const targetUrl = new URL(targetPath, targetBaseUrl);
+  const searchParams = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  targetUrl.search = searchParams.toString();
+
+  const body = getRequestBody(req);
+  const response = await fetch(targetUrl, {
+    method: req.method,
+    headers: buildForwardHeaders(req, Boolean(body)),
+    body,
+    redirect: "manual"
+  });
+
+  copyResponseHeaders(response.headers, res);
+  res.status(response.status);
+
+  if (req.method === "HEAD" || response.status === 204 || response.status === 304) {
+    res.end();
+    return;
+  }
+
+  const responseText = await response.text();
+
+  if (response.status >= 500) {
+    req.log?.error("gateway.upstream.server_error", {
+      targetUrl: targetUrl.toString(),
+      statusCode: response.status,
+      responseBody: responseText.slice(0, 1000)
+    });
+    sendGenericUpstreamError(res);
+    return;
+  }
+
+  res.send(responseText);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\gateway\src\server.js =====
+import { app } from "./app.js";
+import { logger } from "../../shared/src/utils/logger.js";
+import { env } from "./env.js";
+
+const serverLogger = logger.child({ component: "gateway.server" });
+
+const handleListenError = (error) => {
+  if (error?.code === "EADDRINUSE") {
+    serverLogger.error("gateway.listen.port_in_use", {
+      port: env.port
+    });
+    process.exit(1);
+    return;
+  }
+
+  serverLogger.error("gateway.listen.failed", {
+    port: env.port,
+    error: error?.message || "Unknown error"
+  });
+  process.exit(1);
+};
+
+const server = app.listen(env.port, () => {
+  serverLogger.info("gateway.listen.started", {
+    port: env.port
+  });
+});
+
+server.on("error", handleListenError);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\.env.example =====
+NODE_ENV=development
+PORT=5003
+FRONTEND_URL=http://localhost:3000
+SHORT_DOMAIN=http://localhost:5002
+ENABLE_LEGACY_REDIRECT_ROUTE=false
+EMBEDDED_ANALYTICS_WORKER=false
+JWT_ACCESS_TOKEN_SECRET=change-me-access-secret
+GOOGLE_OAUTH_STATE_SECRET=change-me-google-state-secret
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\package.json =====
+{
+  "name": "pklinks-link-service",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.14.1",
+    "zod": "^3.25.67"
+  },
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\app.js =====
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+import { env } from "../../shared/src/config/env.js";
+import { errorHandler, notFoundHandler } from "../../shared/src/middleware/error.middleware.js";
+import authRoutes from "./routes/auth.routes.js";
+import healthRoutes from "../../shared/src/routes/health.routes.js";
+import { createRequestLoggerMiddleware } from "../../shared/src/utils/logger.js";
+import linkRoutes from "./routes/link.routes.js";
+
+export const app = express();
+
+app.set("trust proxy", env.trustProxy);
+app.use(
+  cors({
+    origin: env.frontendUrl,
+    credentials: true
+  })
+);
+app.use(helmet());
+app.use(cookieParser());
+app.use(express.json({ limit: "1mb" }));
+app.use(createRequestLoggerMiddleware({ component: "link-service" }));
+
+app.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    name: "PKLinks Link Service",
+    routes: {
+      auth: "/api/auth/me",
+      links: "/api/links"
+    }
+  });
+});
+
+app.use("/api/health", healthRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/links", linkRoutes);
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\config\env.js =====
+export { env } from "../../../shared/src/config/env.js";
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\controllers\auth.controller.js =====
+import { env } from "../config/env.js";
+import {
+  beginGoogleOAuth,
+  buildGoogleFailureRedirect,
+  buildGoogleSuccessRedirect,
+  clearRefreshSession,
+  completeGoogleOAuth,
+  getAccessCookieOptions,
+  getGoogleStateCookieOptions,
+  getRefreshCookieOptions,
+  loginWithEmailPassword,
+  refreshSession,
+  signupWithEmailPassword
+} from "../services/auth.service.js";
+
+const writeRefreshCookie = (req, res, refreshToken) => {
+  res.cookie(env.refreshTokenCookieName, refreshToken, getRefreshCookieOptions(req));
+};
+
+const writeStateCookie = (req, res, stateNonceHash) => {
+  res.cookie(env.googleOauthStateCookieName, stateNonceHash, getGoogleStateCookieOptions(req));
+};
+
+const clearAccessCookie = (req, res) => {
+  res.clearCookie(env.accessTokenCookieName, getAccessCookieOptions(req));
+};
+
+const clearRefreshCookie = (req, res) => {
+  res.clearCookie(env.refreshTokenCookieName, getRefreshCookieOptions(req));
+};
+
+const clearStateCookie = (req, res) => {
+  res.clearCookie(env.googleOauthStateCookieName, getGoogleStateCookieOptions(req));
+};
+
+const writeRefreshSessionCookie = (req, res, session) => {
+  writeRefreshCookie(req, res, session.refreshToken);
+};
+
+export const signup = async (req, res) => {
+  const session = await signupWithEmailPassword(req.body, req);
+  clearAccessCookie(req, res);
+  writeRefreshSessionCookie(req, res, session);
+
+  res.status(201).json({
+    success: true,
+    data: {
+      accessToken: session.accessToken,
+      user: session.user
+    }
+  });
+};
+
+export const login = async (req, res) => {
+  const session = await loginWithEmailPassword(req.body, req);
+  clearAccessCookie(req, res);
+  writeRefreshSessionCookie(req, res, session);
+
+  res.json({
+    success: true,
+    data: {
+      accessToken: session.accessToken,
+      user: session.user
+    }
+  });
+};
+
+export const refreshAuthSession = async (req, res) => {
+  const refreshToken = req.cookies?.[env.refreshTokenCookieName] || "";
+  const session = await refreshSession(refreshToken, req);
+  clearAccessCookie(req, res);
+  writeRefreshSessionCookie(req, res, session);
+
+  res.json({
+    success: true,
+    data: {
+      accessToken: session.accessToken,
+      user: session.user
+    }
+  });
+};
+
+    clearAccessCookie(req, res);
+export const logout = async (req, res) => {
+  const refreshToken = req.cookies?.[env.refreshTokenCookieName] || "";
+  await clearRefreshSession(refreshToken);
+  clearRefreshCookie(req, res);
+    clearAccessCookie(req, res);
+  clearStateCookie(req, res);
+
+  res.json({
+    success: true,
+    data: {
+      loggedOut: true
+    }
+  });
+};
+
+export const startGoogleLogin = async (req, res) => {
+  const { authorizationUrl, stateNonceHash } = beginGoogleOAuth(req.query?.returnTo);
+  writeStateCookie(req, res, stateNonceHash);
+  res.redirect(302, authorizationUrl);
+};
+
+export const handleGoogleCallback = async (req, res) => {
+  try {
+    const stateToken = String(req.query?.state || "");
+    const code = String(req.query?.code || "");
+    const stateNonceHash = req.cookies?.[env.googleOauthStateCookieName] || "";
+    const { session, returnTo } = await completeGoogleOAuth({
+      code,
+      stateToken,
+      stateNonceHash,
+      req
+    });
+
+    clearStateCookie(req, res);
+    writeRefreshSessionCookie(req, res, session);
+    res.redirect(302, buildGoogleSuccessRedirect(returnTo));
+  } catch (error) {
+    clearStateCookie(req, res);
+    clearRefreshCookie(req, res);
+    res.redirect(302, buildGoogleFailureRedirect(error.message));
+  }
+};
+
+export const getCurrentUser = async (req, res) => {
+  res.json({
+    success: true,
+    data: req.user
+  });
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\controllers\link.controller.js =====
+import {
+  createShortLink,
+  deactivateUserLink,
+  getUserLink,
+  listUserLinks,
+  updateUserLink
+} from "../services/link.service.js";
+
+export const createLink = async (req, res) => {
+  const link = await createShortLink({
+    user: req.user,
+    longUrl: req.body.longUrl,
+    customAlias: req.body.customAlias,
+    expiry: req.body.expiry,
+    title: req.body.title
+  });
+
+  res.status(201).json({
+    success: true,
+    data: link
+  });
+};
+
+export const getLinks = async (req, res) => {
+  const links = await listUserLinks(req.user.uid);
+
+  res.json({
+    success: true,
+    data: links
+  });
+};
+
+export const getLink = async (req, res) => {
+  const link = await getUserLink(req.params.code, req.user.uid);
+
+  res.json({
+    success: true,
+    data: link
+  });
+};
+
+export const updateLink = async (req, res) => {
+  const link = await updateUserLink(req.params.code, req.user.uid, req.body);
+
+  res.json({
+    success: true,
+    data: link
+  });
+};
+
+export const deleteLink = async (req, res) => {
+  const link = await deactivateUserLink(req.params.code, req.user.uid);
+
+  res.json({
+    success: true,
+    data: link
+  });
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\models\AuthSession.js =====
+import mongoose from "mongoose";
+
+const authSessionSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: String,
+      required: true,
+      index: true,
+      trim: true
+    },
+    tokenHash: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true
+    },
+    expiresAt: {
+      type: Date,
+      required: true
+    },
+    userAgent: {
+      type: String,
+      default: ""
+    },
+    createdFromIp: {
+      type: String,
+      default: ""
+    },
+    lastUsedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+authSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+export const AuthSession = mongoose.model("AuthSession", authSessionSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\models\Url.js =====
+import mongoose from "mongoose";
+
+const urlSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    longUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    normalizedUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: 80
+    },
+    userId: {
+      type: String,
+      required: true,
+      index: true
+    },
+    userEmail: {
+      type: String,
+      trim: true
+    },
+    customAlias: {
+      type: Boolean,
+      default: false
+    },
+    expiry: {
+      type: Date,
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    clickCount: {
+      type: Number,
+      default: 0
+    },
+    lastClickedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+urlSchema.index({ userId: 1, createdAt: -1 });
+
+export const Url = mongoose.models.Url || mongoose.model("Url", urlSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\models\User.js =====
+import mongoose from "mongoose";
+
+const userSchema = new mongoose.Schema(
+  {
+    uid: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      lowercase: true,
+      trim: true
+    },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: ""
+    },
+    authProvider: {
+      type: String,
+      enum: ["email", "google"],
+      required: true,
+      default: "email"
+    },
+    passwordHash: {
+      type: String,
+      default: ""
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+export const User = mongoose.models.User || mongoose.model("User", userSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\routes\auth.routes.js =====
+import { Router } from "express";
+import {
+  getCurrentUser,
+  handleGoogleCallback,
+  login,
+  logout,
+  refreshAuthSession,
+  startGoogleLogin,
+  signup
+} from "../controllers/auth.controller.js";
+import { authenticate } from "../../../shared/src/middleware/auth.middleware.js";
+import { validateRequest } from "../../../shared/src/middleware/validate.middleware.js";
+import { protectedApiRateLimiter } from "../../../shared/src/middleware/rateLimit.middleware.js";
+import { asyncHandler } from "../../../shared/src/utils/asyncHandler.js";
+import {
+  emptyBodySchema,
+  googleStartQuerySchema,
+  loginBodySchema,
+  signupBodySchema
+} from "../validation/request.schemas.js";
+
+const router = Router();
+
+router.post("/signup", protectedApiRateLimiter, validateRequest({ body: signupBodySchema }), asyncHandler(signup));
+router.post("/login", protectedApiRateLimiter, validateRequest({ body: loginBodySchema }), asyncHandler(login));
+router.post("/refresh", validateRequest({ body: emptyBodySchema }), asyncHandler(refreshAuthSession));
+router.post("/logout", validateRequest({ body: emptyBodySchema }), asyncHandler(logout));
+router.get("/google/start", protectedApiRateLimiter, validateRequest({ query: googleStartQuerySchema }), asyncHandler(startGoogleLogin));
+router.get("/google/callback", asyncHandler(handleGoogleCallback));
+router.get("/me", authenticate, protectedApiRateLimiter, asyncHandler(getCurrentUser));
+
+export default router;
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\routes\link.routes.js =====
+import { Router } from "express";
+import {
+  createLink,
+  deleteLink,
+  getLink,
+  getLinks,
+  updateLink
+} from "../controllers/link.controller.js";
+import { authenticate } from "../../../shared/src/middleware/auth.middleware.js";
+import { validateRequest } from "../../../shared/src/middleware/validate.middleware.js";
+import {
+  linkCreateRateLimiter,
+  protectedApiRateLimiter
+} from "../../../shared/src/middleware/rateLimit.middleware.js";
+import { asyncHandler } from "../../../shared/src/utils/asyncHandler.js";
+import {
+  createLinkBodySchema,
+  linkCodeParamsSchema,
+  updateLinkBodySchema
+} from "../validation/request.schemas.js";
+
+const router = Router();
+
+router.use(authenticate);
+router.use(protectedApiRateLimiter);
+router.get("/", asyncHandler(getLinks));
+router.post("/", linkCreateRateLimiter, validateRequest({ body: createLinkBodySchema }), asyncHandler(createLink));
+router.get("/:code", validateRequest({ params: linkCodeParamsSchema }), asyncHandler(getLink));
+router.patch("/:code", validateRequest({ params: linkCodeParamsSchema, body: updateLinkBodySchema }), asyncHandler(updateLink));
+router.delete("/:code", validateRequest({ params: linkCodeParamsSchema }), asyncHandler(deleteLink));
+
+export default router;
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\server.js =====
+import { app } from "./app.js";
+import { connectDatabase } from "../../shared/src/config/db.js";
+import { env } from "../../shared/src/config/env.js";
+import { ensureRedisConnection, quitRedisConnection } from "../../shared/src/config/redis.js";
+import { logger } from "../../shared/src/utils/logger.js";
+
+const serverLogger = logger.child({ component: "link-service.server" });
+
+const handleListenError = (error) => {
+  if (error?.code === "EADDRINUSE") {
+    serverLogger.error("link-service.listen.port_in_use", {
+      port: env.port
+    });
+    process.exit(1);
+    return;
+  }
+
+  serverLogger.error("link-service.listen.failed", {
+    port: env.port,
+    error: error?.message || "Unknown error"
+  });
+  process.exit(1);
+};
+
+const startServer = async () => {
+  try {
+    await connectDatabase();
+    await ensureRedisConnection();
+
+    const server = app.listen(env.port, () => {
+      serverLogger.info("link-service.listen.started", {
+        port: env.port
+      });
+    });
+
+    server.on("error", handleListenError);
+  } catch (error) {
+    serverLogger.error("link-service.start.failed", {
+      error: error.message
+    });
+    process.exit(1);
+  }
+};
+
+startServer();
+
+const gracefulShutdown = async () => {
+  await quitRedisConnection();
+  process.exit(0);
+};
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\services\auth.service.js =====
+import { createHash, randomUUID } from "crypto";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { env } from "../config/env.js";
+import { AuthSession } from "../../../shared/src/models/AuthSession.js";
+import { User } from "../models/User.js";
+import { AppError } from "../utils/AppError.js";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GOOGLE_OAUTH_SCOPE = "openid email profile";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
+const PKLINKS_ISSUER = "pklinks";
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+const normalizeName = (value) => String(value || "").trim();
+const hashValue = (value) => createHash("sha256").update(String(value || "")).digest("hex");
+
+const parseDurationToMs = (value, fallbackMs) => {
+  const normalized = String(value || "").trim();
+
+  if (!normalized) {
+    return fallbackMs;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
+  const match = normalized.match(/^(\d+)(ms|s|m|h|d)$/i);
+
+  if (!match) {
+    return fallbackMs;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000
+  };
+
+  return amount * multipliers[unit];
+};
+
+const getRefreshExpiryDate = () => {
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + env.refreshTokenTtlDays);
+  return expiresAt;
+};
+
+const sanitizeReturnTo = (value, fallback = "/dashboard") => {
+  const normalized = String(value || "").trim();
+
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    return fallback;
+  }
+
+  return normalized;
+};
+
+const requireGoogleOAuthConfig = () => {
+  if (!env.googleClientId || !env.googleClientSecret || !env.googleOauthRedirectUri) {
+    throw new AppError("Google sign-in is not configured on the server.", 500);
+  }
+};
+
+const getAccessTokenPayload = (user) => ({
+  sub: user.uid,
+  email: user.email || "",
+  name: user.name || "",
+  authProvider: user.authProvider,
+  type: "access"
+});
+
+const getGoogleStatePayload = ({ nonce, returnTo }) => ({
+  nonce,
+  returnTo: sanitizeReturnTo(returnTo),
+  type: "google_oauth_state"
+});
+
+const isSecureCookieRequest = (req) => {
+  const forwardedProto = String(req?.get?.("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  if (forwardedProto) {
+    return forwardedProto === "https";
+  }
+
+  if (req?.secure) {
+    return true;
+  }
+
+  return env.frontendUrl.startsWith("https://");
+};
+
+const getCookieBaseOptions = (req) => ({
+  httpOnly: true,
+  secure: isSecureCookieRequest(req)
+});
+
+const getFrontendRedirectUrl = (path) => `${env.frontendUrl.replace(/\/$/, "")}${path}`;
+
+export const createAccessToken = (user) => jwt.sign(
+  getAccessTokenPayload(user),
+  env.jwtAccessTokenSecret,
+  {
+    expiresIn: env.jwtAccessTokenTtl,
+    issuer: PKLINKS_ISSUER
+  }
+);
+
+export const verifyAccessToken = (token) => jwt.verify(token, env.jwtAccessTokenSecret, {
+  issuer: PKLINKS_ISSUER
+});
+
+export const createGoogleStateToken = ({ nonce, returnTo }) => jwt.sign(
+  getGoogleStatePayload({ nonce, returnTo }),
+  env.googleOauthStateSecret,
+  {
+    expiresIn: env.googleOauthStateTtl,
+    issuer: PKLINKS_ISSUER
+  }
+);
+
+export const verifyGoogleStateToken = (token) => jwt.verify(token, env.googleOauthStateSecret, {
+  issuer: PKLINKS_ISSUER
+});
+
+export const buildPublicUser = (user) => ({
+  uid: user.uid,
+  email: user.email || "",
+  name: user.name || "",
+  authProvider: user.authProvider
+});
+
+export const getAccessCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "strict",
+  path: "/api",
+  maxAge: parseDurationToMs(env.jwtAccessTokenTtl, 15 * 60 * 1000)
+});
+
+export const getRefreshCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "strict",
+  path: "/api/auth",
+  maxAge: env.refreshTokenTtlDays * 24 * 60 * 60 * 1000
+});
+
+export const getGoogleStateCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "lax",
+  path: "/api/auth/google",
+  maxAge: parseDurationToMs(env.googleOauthStateTtl, 10 * 60 * 1000)
+});
+
+const buildSessionPayload = async (user, req, currentSession = null) => {
+  const accessToken = createAccessToken(user);
+  const refreshToken = randomUUID();
+  const expiresAt = getRefreshExpiryDate();
+
+  await AuthSession.create({
+    userId: user.uid,
+    tokenHash: hashValue(refreshToken),
+    expiresAt,
+    userAgent: req.get("user-agent") || "",
+    createdFromIp: req.ip || "",
+    lastUsedAt: new Date()
+  });
+
+  if (currentSession) {
+    await AuthSession.deleteOne({ _id: currentSession._id });
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    user: buildPublicUser(user)
+  };
+};
+
+export const clearRefreshSession = async (refreshToken) => {
+  if (!refreshToken) {
+    return;
+  }
+
+  await AuthSession.deleteOne({ tokenHash: hashValue(refreshToken) });
+};
+
+export const signupWithEmailPassword = async ({ email, password, fullName }, req) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = normalizeName(fullName);
+  const trimmedPassword = String(password || "");
+
+  if (!EMAIL_REGEX.test(normalizedEmail)) {
+    throw new AppError("Please enter a valid email address.", 400);
+  }
+
+  if (trimmedPassword.length < 6) {
+    throw new AppError("Use at least 6 characters for your password.", 400);
+  }
+
+  const existingUser = await User.findOne({ email: normalizedEmail }).lean();
+
+  if (existingUser) {
+    if (existingUser.authProvider === "google") {
+      throw new AppError("That email already uses Google sign-in.", 409);
+    }
+
+    throw new AppError("An account already exists for that email.", 409);
+  }
+
+  const passwordHash = await bcrypt.hash(trimmedPassword, 12);
+  const user = await User.create({
+    uid: randomUUID(),
+    email: normalizedEmail,
+    name: normalizedName,
+    authProvider: "email",
+    passwordHash
+  });
+
+  return buildSessionPayload(user, req);
+};
+
+export const loginWithEmailPassword = async ({ email, password }, req) => {
+  const normalizedEmail = normalizeEmail(email);
+  const trimmedPassword = String(password || "");
+
+  if (!EMAIL_REGEX.test(normalizedEmail) || !trimmedPassword) {
+    throw new AppError("Email and password are required.", 400);
+  }
+
+  const user = await User.findOne({ email: normalizedEmail });
+
+  if (user?.authProvider === "google") {
+    throw new AppError("Use Google sign-in for this account.", 401);
+  }
+
+  if (!user || user.authProvider !== "email" || !user.passwordHash) {
+    throw new AppError("Invalid email or password.", 401);
+  }
+
+  const passwordMatches = await bcrypt.compare(trimmedPassword, user.passwordHash);
+
+  if (!passwordMatches) {
+    throw new AppError("Invalid email or password.", 401);
+  }
+
+  return buildSessionPayload(user, req);
+};
+
+export const refreshSession = async (refreshToken, req) => {
+  if (!refreshToken) {
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  const currentSession = await AuthSession.findOne({
+    tokenHash: hashValue(refreshToken)
+  });
+
+  if (!currentSession || currentSession.expiresAt.getTime() <= Date.now()) {
+    if (currentSession) {
+      await AuthSession.deleteOne({ _id: currentSession._id });
+    }
+
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  const user = await User.findOne({ uid: currentSession.userId });
+
+  if (!user) {
+    await AuthSession.deleteOne({ _id: currentSession._id });
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  currentSession.lastUsedAt = new Date();
+  await currentSession.save();
+
+  return buildSessionPayload(user, req, currentSession);
+};
+
+export const syncGoogleUser = async ({ uid, email, name }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = normalizeName(name);
+
+  if (!uid) {
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  let user = await User.findOne({ uid });
+
+  if (!user && normalizedEmail) {
+    user = await User.findOne({ email: normalizedEmail });
+  }
+
+  if (!user) {
+    user = await User.create({
+      uid,
+      email: normalizedEmail,
+      name: normalizedName,
+      authProvider: "google"
+    });
+  } else {
+    if (user.authProvider === "email" && user.uid !== uid) {
+      throw new AppError("Use email sign-in for this account.", 409);
+    }
+
+    user.uid = uid;
+    user.email = normalizedEmail || user.email;
+    user.name = normalizedName || user.name;
+    user.authProvider = "google";
+    await user.save();
+  }
+
+  return user;
+};
+
+export const getUserFromAccessToken = async (token) => {
+  const decoded = verifyAccessToken(token);
+
+  if (decoded?.type !== "access" || !decoded?.sub) {
+    throw new AppError("Invalid or expired authentication token.", 401);
+  }
+
+  const user = await User.findOne({ uid: decoded.sub }).lean();
+
+  if (!user) {
+    throw new AppError("Invalid or expired authentication token.", 401);
+  }
+
+  return buildPublicUser(user);
+};
+
+export const beginGoogleOAuth = (returnTo = "/dashboard") => {
+  requireGoogleOAuthConfig();
+
+  const nonce = randomUUID();
+  const stateToken = createGoogleStateToken({
+    nonce,
+    returnTo
+  });
+
+  const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authorizationUrl.searchParams.set("client_id", env.googleClientId);
+  authorizationUrl.searchParams.set("redirect_uri", env.googleOauthRedirectUri);
+  authorizationUrl.searchParams.set("response_type", "code");
+  authorizationUrl.searchParams.set("scope", GOOGLE_OAUTH_SCOPE);
+  authorizationUrl.searchParams.set("state", stateToken);
+  authorizationUrl.searchParams.set("prompt", "select_account");
+
+  return {
+    authorizationUrl: authorizationUrl.toString(),
+    stateNonceHash: hashValue(nonce)
+  };
+};
+
+const exchangeGoogleCode = async (code) => {
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      code,
+      client_id: env.googleClientId,
+      client_secret: env.googleClientSecret,
+      redirect_uri: env.googleOauthRedirectUri,
+      grant_type: "authorization_code"
+    })
+  });
+
+  if (!response.ok) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  return response.json();
+};
+
+const fetchGoogleUserProfile = async (googleAccessToken) => {
+  const response = await fetch(GOOGLE_USERINFO_URL, {
+    headers: {
+      authorization: `Bearer ${googleAccessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const profile = await response.json();
+
+  if (!profile?.sub || !profile?.email || profile.email_verified !== true) {
+    throw new AppError("Google sign-in did not return a verified email address.", 401);
+  }
+
+  return profile;
+};
+
+export const completeGoogleOAuth = async ({
+  code,
+  stateToken,
+  stateNonceHash,
+  req
+}) => {
+  requireGoogleOAuthConfig();
+
+  if (!code || !stateToken || !stateNonceHash) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const decodedState = verifyGoogleStateToken(stateToken);
+
+  if (decodedState?.type !== "google_oauth_state" || hashValue(decodedState.nonce) !== stateNonceHash) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const tokenResponse = await exchangeGoogleCode(code);
+  const profile = await fetchGoogleUserProfile(tokenResponse.access_token);
+  const user = await syncGoogleUser({
+    uid: profile.sub,
+    email: profile.email,
+    name: profile.name || profile.given_name || ""
+  });
+
+  return {
+    session: await buildSessionPayload(user, req),
+    returnTo: sanitizeReturnTo(decodedState.returnTo)
+  };
+};
+
+export const buildGoogleSuccessRedirect = (returnTo) => getFrontendRedirectUrl(
+  sanitizeReturnTo(returnTo)
+);
+
+export const buildGoogleFailureRedirect = (message) => {
+  const url = new URL("/login", env.frontendUrl);
+  url.searchParams.set("authError", message || "Google sign-in could not be completed.");
+  return url.toString();
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\services\idGenerator.service.js =====
+import { randomInt } from "crypto";
+
+import { Url } from "../models/Url.js";
+import { AppError } from "../utils/AppError.js";
+import { isReservedCode, sanitizeAlias } from "../utils/base62.js";
+
+const ALIAS_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9-_]{2,39}$/;
+const SHORT_ID_LENGTH = 6;
+const SHORT_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const MAX_GENERATION_ATTEMPTS = 10;
+
+const generateRandomCode = (length = SHORT_ID_LENGTH) => {
+  let code = "";
+
+  for (let index = 0; index < length; index += 1) {
+    code += SHORT_ID_ALPHABET[randomInt(SHORT_ID_ALPHABET.length)];
+  }
+
+  return code;
+};
+
+export const validateCustomAlias = async (value) => {
+  const alias = sanitizeAlias(value);
+
+  if (!ALIAS_PATTERN.test(alias) || isReservedCode(alias)) {
+    throw new AppError(
+      "Custom alias must be 3-40 characters and use only letters, numbers, hyphens, or underscores.",
+      400
+    );
+  }
+
+  const existing = await Url.exists({ code: alias });
+
+  if (existing) {
+    throw new AppError("That custom alias is already taken.", 409);
+  }
+
+  return alias;
+};
+
+export const generateUniqueCode = async () => {
+  for (let attempt = 0; attempt < MAX_GENERATION_ATTEMPTS; attempt += 1) {
+    const candidate = generateRandomCode();
+
+    if (isReservedCode(candidate)) {
+      continue;
+    }
+
+    const existing = await Url.exists({ code: candidate });
+
+    if (!existing) {
+      return candidate;
+    }
+  }
+
+  throw new AppError("Unable to generate a unique short code. Please try again.", 503);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\services\link.service.js =====
+import { Url } from "../models/Url.js";
+import { AppError } from "../utils/AppError.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+import { invalidateUrlCache, writeUrlToCache } from "../../../shared/src/services/cache.service.js";
+import { generateUniqueCode, validateCustomAlias } from "./idGenerator.service.js";
+import { normalizeHttpUrl } from "../utils/urlValidation.js";
+
+const urlServiceLogger = logger.child({ component: "url.service" });
+const MAX_CREATE_ATTEMPTS = 5;
+
+const isDuplicateKeyError = (error) => error?.code === 11000;
+
+const getStatus = (urlRecord) => {
+  if (urlRecord.expiry && new Date(urlRecord.expiry) < new Date()) {
+    return "expired";
+  }
+
+  if (!urlRecord.isActive) {
+    return "inactive";
+  }
+
+  return "active";
+};
+
+const serializeLink = (urlRecord) => ({
+  id: urlRecord._id,
+  code: urlRecord.code,
+  title: urlRecord.title || "",
+  longUrl: urlRecord.longUrl,
+  clickCount: urlRecord.clickCount || 0,
+  customAlias: urlRecord.customAlias,
+  expiry: urlRecord.expiry,
+  isActive: urlRecord.isActive,
+  status: getStatus(urlRecord),
+  lastClickedAt: urlRecord.lastClickedAt,
+  createdAt: urlRecord.createdAt
+});
+
+export const createShortLink = async ({ user, longUrl, customAlias, expiry, title }) => {
+  const requestLogger = urlServiceLogger.child({
+    action: "create",
+    userId: user.uid,
+    customAlias: Boolean(customAlias)
+  });
+  const normalizedUrl = normalizeHttpUrl(longUrl);
+  let code = "";
+
+  if (customAlias) {
+    code = await validateCustomAlias(customAlias);
+  } else {
+    code = await generateUniqueCode();
+  }
+
+  if (expiry && Number.isNaN(new Date(expiry).getTime())) {
+    throw new AppError("Expiry must be a valid date.", 400);
+  }
+
+  if (expiry && new Date(expiry) <= new Date()) {
+    throw new AppError("Expiry must be in the future.", 400);
+  }
+
+  let urlRecord;
+
+  for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
+    try {
+      urlRecord = await Url.create({
+        code,
+        longUrl: normalizedUrl,
+        normalizedUrl,
+        title: title?.trim(),
+        userId: user.uid,
+        userEmail: user.email || "",
+        customAlias: Boolean(customAlias),
+        expiry: expiry ? new Date(expiry) : null
+      });
+      break;
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        if (customAlias) {
+          throw new AppError("That custom alias is already taken.", 409);
+        }
+
+        code = await generateUniqueCode();
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (!urlRecord) {
+    throw new AppError("Unable to create a unique short code. Please try again.", 503);
+  }
+
+  await writeUrlToCache(urlRecord, {
+    requestId: user.requestId,
+    source: "createShortLink"
+  });
+
+  requestLogger.info("link.create.succeeded", {
+    code
+  });
+
+  return serializeLink(urlRecord.toObject());
+};
+
+export const listUserLinks = async (userId) => {
+  const links = await Url.find({ userId }).sort({ createdAt: -1 }).lean();
+
+  urlServiceLogger.debug("links.list.succeeded", {
+    userId,
+    count: links.length
+  });
+
+  return links.map(serializeLink);
+};
+
+export const getUserLink = async (code, userId) => {
+  const link = await Url.findOne({ code, userId }).lean();
+
+  if (!link) {
+    urlServiceLogger.warn("links.get.not_found", {
+      code,
+      userId
+    });
+    throw new AppError("Link not found.", 404);
+  }
+
+  urlServiceLogger.debug("links.get.succeeded", {
+    code,
+    userId
+  });
+
+  return serializeLink(link);
+};
+
+export const updateUserLink = async (code, userId, updates) => {
+  const link = await Url.findOne({ code, userId });
+
+  if (!link) {
+    urlServiceLogger.warn("links.update.not_found", {
+      code,
+      userId
+    });
+    throw new AppError("Link not found.", 404);
+  }
+
+  if (typeof updates.title === "string") {
+    link.title = updates.title.trim();
+  }
+
+  if (typeof updates.isActive === "boolean") {
+    link.isActive = updates.isActive;
+  }
+
+  if (updates.expiry === null || updates.expiry === "") {
+    link.expiry = null;
+  } else if (updates.expiry) {
+    const parsedExpiry = new Date(updates.expiry);
+
+    if (Number.isNaN(parsedExpiry.getTime()) || parsedExpiry <= new Date()) {
+      throw new AppError("Expiry must be a valid future date.", 400);
+    }
+
+    link.expiry = parsedExpiry;
+  }
+
+  await link.save();
+  await invalidateUrlCache(code, { source: "updateUserLink" });
+  await writeUrlToCache(link, { source: "updateUserLink" });
+
+  urlServiceLogger.info("links.update.succeeded", {
+    code,
+    userId
+  });
+
+  return serializeLink(link.toObject());
+};
+
+export const deactivateUserLink = async (code, userId) => {
+  const link = await Url.findOneAndUpdate(
+    { code, userId },
+    { $set: { isActive: false } },
+    { new: true }
+  );
+
+  if (!link) {
+    urlServiceLogger.warn("links.deactivate.not_found", {
+      code,
+      userId
+    });
+    throw new AppError("Link not found.", 404);
+  }
+
+  await invalidateUrlCache(code, { source: "deactivateUserLink" });
+
+  urlServiceLogger.info("links.deactivate.succeeded", {
+    code,
+    userId
+  });
+
+  return serializeLink(link.toObject());
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\utils\AppError.js =====
+export { AppError } from "../../../shared/src/utils/AppError.js";
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\utils\base62.js =====
+const ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const RESERVED_CODES = new Set(["api", "auth", "health", "favicon.ico"]);
+
+export const encodeBase62 = (value) => {
+  if (value === 0) {
+    return ALPHABET[0];
+  }
+
+  let encoded = "";
+  let current = value;
+
+  while (current > 0) {
+    encoded = ALPHABET[current % 62] + encoded;
+    current = Math.floor(current / 62);
+  }
+
+  return encoded;
+};
+
+export const sanitizeAlias = (value = "") =>
+  value
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-zA-Z0-9-_]/g, "");
+
+export const isReservedCode = (code) => RESERVED_CODES.has(code);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\utils\urlValidation.js =====
+import { AppError } from "./AppError.js";
+
+const IPV4_HOST_REGEX = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+
+const hasSupportedHostnameShape = (hostname) => {
+  if (!hostname) {
+    return false;
+  }
+
+  if (hostname === "localhost") {
+    return true;
+  }
+
+  if (hostname.includes(":")) {
+    return true;
+  }
+
+  if (IPV4_HOST_REGEX.test(hostname)) {
+    return true;
+  }
+
+  return hostname.includes(".");
+};
+
+export const normalizeHttpUrl = (value) => {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new AppError("Please enter a valid URL.", 400);
+  }
+
+  const trimmedValue = value.trim();
+  const candidate =
+    trimmedValue.startsWith("http://") || trimmedValue.startsWith("https://")
+      ? trimmedValue
+      : `https://${trimmedValue}`;
+
+  let parsed;
+
+  try {
+    parsed = new URL(candidate);
+  } catch (_error) {
+    throw new AppError("Please enter a valid URL.", 400);
+  }
+
+  if (!["http:", "https:"].includes(parsed.protocol) || !hasSupportedHostnameShape(parsed.hostname)) {
+    throw new AppError("Please enter a valid URL.", 400);
+  }
+
+  return parsed.toString();
+};
+
+export const isValidHttpUrlInput = (value) => {
+  try {
+    normalizeHttpUrl(value);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\link-service\src\validation\request.schemas.js =====
+import { z } from "zod";
+import { isValidHttpUrlInput } from "../utils/urlValidation.js";
+
+const trimString = (value) => (typeof value === "string" ? value.trim() : value);
+
+const optionalTrimmedString = (maxLength) => z.preprocess(
+  (value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    return trimString(value);
+  },
+  z.string().max(maxLength).optional()
+);
+
+const optionalNonEmptyTrimmedString = (maxLength) => z.preprocess(
+  (value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    const trimmed = trimString(value);
+    return trimmed === "" ? undefined : trimmed;
+  },
+  z.string().min(1).max(maxLength).optional()
+);
+
+const expiryString = z.string().refine(
+  (value) => !Number.isNaN(new Date(value).getTime()),
+  "Expiry must be a valid date."
+);
+
+const optionalFutureExpiryString = z.preprocess(
+  (value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    const trimmed = trimString(value);
+    return trimmed === "" ? undefined : trimmed;
+  },
+  expiryString.optional()
+);
+
+const nullableExpiryString = z.preprocess(
+  (value) => {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (value === null) {
+      return null;
+    }
+
+    const trimmed = trimString(value);
+    return trimmed === "" ? null : trimmed;
+  },
+  z.union([z.null(), expiryString]).optional()
+);
+
+export const emptyBodySchema = z.object({}).strict();
+
+export const signupBodySchema = z.object({
+  fullName: optionalTrimmedString(120),
+  email: z.preprocess(trimString, z.string().email("Please enter a valid email address.")),
+  password: z.string().min(6, "Use at least 6 characters for your password.").max(128)
+}).strict();
+
+export const loginBodySchema = z.object({
+  email: z.preprocess(trimString, z.string().email("Please enter a valid email address.")),
+  password: z.string().min(1, "Password is required.").max(128)
+}).strict();
+
+export const googleStartQuerySchema = z.object({
+  returnTo: optionalNonEmptyTrimmedString(2048)
+}).strict();
+
+export const linkCodeParamsSchema = z.object({
+  code: z.preprocess(
+    trimString,
+    z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, "Invalid link code.")
+  )
+}).strict();
+
+export const createLinkBodySchema = z.object({
+  longUrl: z.preprocess(
+    trimString,
+    z.string()
+      .min(1, "Long URL is required.")
+      .max(2048)
+      .refine(isValidHttpUrlInput, "Please enter a valid URL.")
+  ),
+  title: optionalTrimmedString(160),
+  customAlias: z.preprocess(
+    (value) => {
+      if (value === undefined) {
+        return undefined;
+      }
+
+      const trimmed = trimString(value);
+      return trimmed === "" ? undefined : trimmed;
+    },
+    z.string()
+      .regex(/^[a-zA-Z0-9][a-zA-Z0-9-_]{2,39}$/, "Custom alias must be 3-40 characters and use only letters, numbers, hyphens, or underscores.")
+      .optional()
+  ),
+  expiry: optionalFutureExpiryString
+}).strict();
+
+export const updateLinkBodySchema = z.object({
+  title: optionalTrimmedString(160),
+  isActive: z.boolean().optional(),
+  expiry: nullableExpiryString
+}).strict().refine(
+  (value) => Object.keys(value).length > 0,
+  {
+    message: "Provide at least one field to update.",
+    path: ["body"]
+  }
+);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\.env.example =====
+NODE_ENV=development
+PORT=5005
+FRONTEND_URL=http://localhost:3000
+SHORT_DOMAIN=http://localhost:5002
+ENABLE_LEGACY_REDIRECT_ROUTE=false
+COUNTRY_LOOKUP_ENABLED=true
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\package.json =====
+{
+  "name": "pklinks-redirect-service",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^8.1.0",
+    "mongoose": "^8.14.1",
+    "ua-parser-js": "^1.0.39"
+  },
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\app.js =====
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+import { env } from "../../shared/src/config/env.js";
+import { errorHandler, notFoundHandler } from "../../shared/src/middleware/error.middleware.js";
+import healthRoutes from "../../shared/src/routes/health.routes.js";
+import redirectRoutes from "./routes/redirect.routes.js";
+import { createRequestLoggerMiddleware } from "../../shared/src/utils/logger.js";
+
+export const app = express();
+
+app.set("trust proxy", env.trustProxy);
+app.use(
+  cors({
+    origin: env.frontendUrl,
+    credentials: true
+  })
+);
+app.use(helmet());
+app.use(createRequestLoggerMiddleware({ component: "redirect-service" }));
+
+app.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    name: "PKLinks Redirect Service",
+    routes: {
+      redirect: "/r/:code",
+      apiRedirect: "/api/redirect/:code"
+    }
+  });
+});
+
+app.use("/api/health", healthRoutes);
+app.use("/api/redirect", redirectRoutes);
+app.use("/r", redirectRoutes);
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\config\env.js =====
+export { env } from "../../../shared/src/config/env.js";
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\controllers\redirect.controller.js =====
+import { randomUUID } from "crypto";
+import { enqueueClickEvent } from "../../../analytics-worker/src/services/analyticsQueue.service.js";
+import { resolveShortCode } from "../services/redirect.service.js";
+import { getRequestMeta } from "../utils/requestMeta.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+
+const getTargetHost = (value) => {
+  try {
+    return new URL(value).hostname;
+  } catch (_error) {
+    return "unknown";
+  }
+};
+
+const redirectLogger = logger.child({ component: "redirect" });
+
+export const handleRedirect = async (req, res) => {
+  const eventId = randomUUID();
+  const requestLogger = redirectLogger.child({
+    requestId: req.requestId,
+    code: req.params.code,
+    eventId
+  });
+
+  requestLogger.debug("redirect.lookup.started");
+
+  const urlRecord = await resolveShortCode(req.params.code, {
+    requestId: req.requestId,
+    source: "redirect"
+  });
+
+  if (!urlRecord) {
+    requestLogger.warn("redirect.lookup.not_found");
+    return res.status(404).send("Short link not found, inactive, or expired.");
+  }
+
+  const analyticsPayload = {
+    eventId,
+    requestId: req.requestId,
+    code: req.params.code,
+    occurredAt: new Date().toISOString(),
+    ...getRequestMeta(req)
+  };
+
+  void enqueueClickEvent(analyticsPayload)
+    .then(() => {
+      requestLogger.debug("redirect.analytics.enqueued");
+    })
+    .catch((error) => {
+      requestLogger.error("redirect.analytics.enqueue_failed", {
+        error
+      });
+    });
+
+  requestLogger.debug("redirect.response.sent", {
+    targetHost: getTargetHost(urlRecord.longUrl)
+  });
+
+  return res.redirect(302, urlRecord.longUrl);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\models\Url.js =====
+import mongoose from "mongoose";
+
+const urlSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    longUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    normalizedUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: 80
+    },
+    userId: {
+      type: String,
+      required: true,
+      index: true
+    },
+    userEmail: {
+      type: String,
+      trim: true
+    },
+    customAlias: {
+      type: Boolean,
+      default: false
+    },
+    expiry: {
+      type: Date,
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    clickCount: {
+      type: Number,
+      default: 0
+    },
+    lastClickedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+urlSchema.index({ userId: 1, createdAt: -1 });
+
+export const Url = mongoose.models.Url || mongoose.model("Url", urlSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\routes\redirect.routes.js =====
+import { Router } from "express";
+import { handleRedirect } from "../controllers/redirect.controller.js";
+import { redirectRateLimiter } from "../../../shared/src/middleware/rateLimit.middleware.js";
+import { asyncHandler } from "../../../shared/src/utils/asyncHandler.js";
+
+const router = Router();
+
+router.get("/:code([A-Za-z0-9_-]{1,64})", redirectRateLimiter, asyncHandler(handleRedirect));
+
+export default router;
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\server.js =====
+import { app } from "./app.js";
+import { connectDatabase } from "../../shared/src/config/db.js";
+import { env } from "../../shared/src/config/env.js";
+import { ensureRedisConnection, quitRedisConnection } from "../../shared/src/config/redis.js";
+import { logger } from "../../shared/src/utils/logger.js";
+
+const serverLogger = logger.child({ component: "redirect-service.server" });
+
+const handleListenError = (error) => {
+  if (error?.code === "EADDRINUSE") {
+    serverLogger.error("redirect-service.listen.port_in_use", {
+      port: env.port
+    });
+    process.exit(1);
+    return;
+  }
+
+  serverLogger.error("redirect-service.listen.failed", {
+    port: env.port,
+    error: error?.message || "Unknown error"
+  });
+  process.exit(1);
+};
+
+const startServer = async () => {
+  try {
+    await connectDatabase();
+    const redisAvailable = await ensureRedisConnection();
+
+    if (!redisAvailable) {
+      serverLogger.warn("redirect-service.redis.unavailable");
+    }
+
+    const server = app.listen(env.port, () => {
+      serverLogger.info("redirect-service.listen.started", {
+        port: env.port
+      });
+    });
+
+    server.on("error", handleListenError);
+  } catch (error) {
+    serverLogger.error("redirect-service.start.failed", {
+      error: error.message
+    });
+    process.exit(1);
+  }
+};
+
+startServer();
+
+const gracefulShutdown = async () => {
+  await quitRedisConnection();
+  process.exit(0);
+};
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\services\redirect.service.js =====
+import { Url } from "../models/Url.js";
+import { readUrlFromCache, writeNegativeCache, writeUrlToCache } from "../../../shared/src/services/cache.service.js";
+import { logger } from "../../../shared/src/utils/logger.js";
+
+const redirectServiceLogger = logger.child({ component: "redirect.service" });
+
+
+export const resolveShortCode = async (code, context = {}) => {
+  const requestLogger = redirectServiceLogger.child({
+    code,
+    action: "resolveShortCode",
+    ...context
+  });
+  const cached = await readUrlFromCache(code, context);
+
+  if (cached.status === "negative") {
+    requestLogger.debug("redirect.resolve.negative_cache_hit");
+    return null;
+  }
+
+  if (cached.status === "hit") {
+    const isExpired = cached.value.expiry && new Date(cached.value.expiry) < new Date();
+
+    if (!cached.value.isActive || isExpired) {
+      requestLogger.debug("redirect.resolve.cache_hit_but_unavailable", {
+        isActive: cached.value.isActive,
+        isExpired
+      });
+      return null;
+    }
+
+    requestLogger.debug("redirect.resolve.cache_hit");
+    return cached.value;
+  }
+
+  const urlRecord = await Url.findOne({ code }).lean();
+
+  if (!urlRecord) {
+    await writeNegativeCache(code, context);
+    requestLogger.debug("redirect.resolve.db_miss");
+    return null;
+  }
+
+  const isExpired = urlRecord.expiry && new Date(urlRecord.expiry) < new Date();
+
+  if (!urlRecord.isActive || isExpired) {
+    await writeNegativeCache(code, context);
+    requestLogger.debug("redirect.resolve.db_hit_but_unavailable", {
+      isActive: urlRecord.isActive,
+      isExpired
+    });
+    return null;
+  }
+
+  await writeUrlToCache(urlRecord, {
+    ...context,
+    source: "resolveShortCode"
+  });
+
+  requestLogger.debug("redirect.resolve.db_hit");
+
+  return urlRecord;
+};
+
+
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\redirect-service\src\utils\requestMeta.js =====
+import UAParser from "ua-parser-js";
+import { env } from "../config/env.js";
+import { normalizeCountryLabel } from "../../../shared/src/services/country.service.js";
+
+const COUNTRY_HEADERS = [
+  "cf-ipcountry",
+  "x-vercel-ip-country",
+  "cloudfront-viewer-country",
+  "fastly-client-country-code",
+  "x-appengine-country",
+  "x-geo-country",
+  "x-country-code"
+];
+
+const normalizeHost = (value) => String(value || "").trim().toLowerCase().replace(/^www\./, "");
+
+const parseUrl = (value) => {
+  try {
+    return new URL(value);
+  } catch (_error) {
+    return null;
+  }
+};
+
+const SELF_HOSTS = new Set(
+  [env.shortDomain, env.frontendUrl]
+    .map(parseUrl)
+    .filter(Boolean)
+    .map((url) => normalizeHost(url.hostname))
+);
+
+const REFERRER_SOURCE_RULES = [
+  { label: "Google", patterns: ["google."] },
+  { label: "YouTube", patterns: ["youtube.com", "youtu.be"] },
+  { label: "Facebook", patterns: ["facebook.com", "fb.com", "m.facebook.com"] },
+  { label: "Instagram", patterns: ["instagram.com", "l.instagram.com"] },
+  { label: "WhatsApp", patterns: ["whatsapp.com", "l.whatsapp.net"] },
+  { label: "Telegram", patterns: ["t.me", "telegram.me", "telegram.org"] },
+  { label: "X", patterns: ["twitter.com", "x.com", "t.co"] },
+  { label: "LinkedIn", patterns: ["linkedin.com", "lnkd.in"] },
+  { label: "Reddit", patterns: ["reddit.com", "redd.it"] },
+  { label: "Bing", patterns: ["bing.com"] },
+  { label: "DuckDuckGo", patterns: ["duckduckgo.com"] },
+  { label: "Yahoo", patterns: ["yahoo.com"] }
+];
+
+const getReferrerLabel = (req) => {
+  const rawValue = req.get("referer") || req.get("referrer");
+
+  if (!rawValue) {
+    return "Direct";
+  }
+
+  const url = parseUrl(rawValue);
+
+  if (!url) {
+    return "Direct";
+  }
+
+  const hostname = normalizeHost(url.hostname);
+
+  if (!hostname || SELF_HOSTS.has(hostname)) {
+    return "Direct";
+  }
+
+  const matchingRule = REFERRER_SOURCE_RULES.find(({ patterns }) => patterns.some((pattern) => hostname.includes(pattern)));
+
+  return matchingRule?.label || hostname;
+};
+
+const IP_HEADERS = [
+  "cf-connecting-ip",
+  "x-real-ip",
+  "fastly-client-ip",
+  "x-client-ip",
+  "x-vercel-forwarded-for",
+  "x-forwarded-for"
+];
+
+const normalizeIpCandidate = (value) => {
+  const normalized = String(value || "").trim();
+
+  if (!normalized) {
+    return "";
+  }
+
+  const withoutIpv6Prefix = normalized.replace(/^::ffff:/i, "");
+
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(withoutIpv6Prefix)) {
+    return withoutIpv6Prefix.replace(/:\d+$/, "");
+  }
+
+  return withoutIpv6Prefix;
+};
+
+const isPrivateIpv4 = (ip) => {
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+    return false;
+  }
+
+  const [first, second] = ip.split(".").map(Number);
+
+  return (
+    first === 10
+    || first === 127
+    || first === 0
+    || (first === 192 && second === 168)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 169 && second === 254)
+  );
+};
+
+const isPrivateIp = (ip) => {
+  const normalized = normalizeIpCandidate(ip).toLowerCase();
+
+  if (!normalized || normalized === "unknown" || normalized === "localhost" || normalized === "::1") {
+    return true;
+  }
+
+  if (isPrivateIpv4(normalized)) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("fc")
+    || normalized.startsWith("fd")
+    || normalized.startsWith("fe80:")
+  );
+};
+
+const extractIpCandidates = (req) => [
+  ...IP_HEADERS.flatMap((header) => String(req.get(header) || "").split(",")),
+  ...(Array.isArray(req.ips) ? req.ips : []),
+  req.ip,
+  req.socket?.remoteAddress
+]
+  .map(normalizeIpCandidate)
+  .filter(Boolean);
+
+const getCountryLabel = (req) => {
+  const rawValue = COUNTRY_HEADERS
+    .map((header) => req.get(header))
+    .find((value) => value && String(value).trim());
+
+  return normalizeCountryLabel(rawValue);
+};
+
+const getClientIp = (req) => {
+  const candidates = extractIpCandidates(req);
+  const publicIp = candidates.find((candidate) => !isPrivateIp(candidate));
+
+  return publicIp || candidates[0] || "unknown";
+};
+
+export const getRequestMeta = (req) => {
+  const parser = new UAParser(req.headers["user-agent"] || "");
+  const result = parser.getResult();
+  const clientIp = getClientIp(req);
+
+  return {
+    referrer: getReferrerLabel(req),
+    browser: result.browser.name || "Unknown",
+    deviceType: result.device.type || "desktop",
+    country: getCountryLabel(req),
+    clientIp
+  };
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\package.json =====
+{
+  "name": "pklinks-shared",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "ioredis": "^5.6.1",
+    "mongoose": "^8.14.1",
+    "morgan": "^1.10.1",
+    "pg": "^8.20.0",
+    "zod": "^3.25.67"
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\config\db.js =====
+import mongoose from "mongoose";
+import { env } from "./env.js";
+
+export const connectDatabase = async () => {
+  await mongoose.connect(env.mongodbUri, {
+    serverSelectionTimeoutMS: 10000
+  });
+
+  console.log("MongoDB connected");
+};
+
+export const closeDatabase = async () => {
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\config\env.js =====
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const getBooleanEnv = (key, fallback = false) => {
+  const value = process.env[key];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+};
+
+const getOptionalEnv = (key, fallback = "") => {
+  const value = process.env[key] ?? fallback;
+
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return String(value).trim();
+};
+
+const getTrustProxyEnv = () => {
+  const value = process.env.TRUST_PROXY;
+
+  if (value === undefined || value === "") {
+    return 1;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+
+  if (normalized === "true") {
+    return true;
+  }
+
+  if (normalized === "false") {
+    return false;
+  }
+
+  const numericValue = Number(value);
+  return Number.isNaN(numericValue) ? value : numericValue;
+};
+
+export const env = {
+  nodeEnv: process.env.NODE_ENV || "development",
+  port: Number(process.env.PORT || 5000),
+  mongodbUri: getOptionalEnv("MONGODB_URI", "mongodb://127.0.0.1:27017/pklinks"),
+  frontendUrl: getOptionalEnv("FRONTEND_URL", "http://localhost:3000"),
+  trustProxy: getTrustProxyEnv(),
+  redisUrl: getOptionalEnv("REDIS_URL"),
+  redisTimeoutMs: Number(process.env.REDIS_TIMEOUT_MS || 5000),
+  shortDomain: getOptionalEnv("SHORT_DOMAIN", "http://localhost:5002"),
+  enableLegacyRedirectRoute: getBooleanEnv("ENABLE_LEGACY_REDIRECT_ROUTE", true),
+  embeddedAnalyticsWorker: getBooleanEnv("EMBEDDED_ANALYTICS_WORKER", true),
+  analyticsQueryBucket: process.env.ANALYTICS_QUERY_BUCKET || "1 day",
+  redirectRateLimitPerMinute: Number(process.env.REDIRECT_RATE_LIMIT_PER_MINUTE || 240),
+  authenticatedApiRateLimitPerMinute: Number(
+    process.env.AUTHENTICATED_API_RATE_LIMIT_PER_MINUTE || 240
+  ),
+  linkCreateRateLimitPerMinute: Number(process.env.LINK_CREATE_RATE_LIMIT_PER_MINUTE || 30),
+  analyticsWorkerConcurrency: Number(process.env.ANALYTICS_WORKER_CONCURRENCY || 10),
+  jwtAccessTokenSecret: getOptionalEnv("JWT_ACCESS_TOKEN_SECRET", "change-me-access-secret"),
+  jwtAccessTokenTtl: process.env.JWT_ACCESS_TOKEN_TTL || "15m",
+  accessTokenCookieName: process.env.ACCESS_TOKEN_COOKIE_NAME || "pklinks_access_token",
+  refreshTokenTtlDays: Number(process.env.REFRESH_TOKEN_TTL_DAYS || 14),
+  refreshTokenCookieName: process.env.REFRESH_TOKEN_COOKIE_NAME || "pklinks_refresh_token",
+  googleClientId: getOptionalEnv("GOOGLE_CLIENT_ID"),
+  googleClientSecret: getOptionalEnv("GOOGLE_CLIENT_SECRET"),
+  googleOauthRedirectUri: getOptionalEnv("GOOGLE_OAUTH_REDIRECT_URI"),
+  googleOauthStateSecret: getOptionalEnv("GOOGLE_OAUTH_STATE_SECRET", process.env.JWT_ACCESS_TOKEN_SECRET || "change-me-access-secret"),
+  googleOauthStateTtl: process.env.GOOGLE_OAUTH_STATE_TTL || "10m",
+  googleOauthStateCookieName: process.env.GOOGLE_OAUTH_STATE_COOKIE_NAME || "pklinks_google_oauth_state",
+  countryLookupEnabled: getBooleanEnv("COUNTRY_LOOKUP_ENABLED", true),
+  countryLookupTimeoutMs: Number(process.env.COUNTRY_LOOKUP_TIMEOUT_MS || 800),
+  countryCacheTtlSeconds: Number(process.env.COUNTRY_CACHE_TTL_SECONDS || 86400),
+  countryLookupUrlTemplate: process.env.COUNTRY_LOOKUP_URL_TEMPLATE || "https://api.country.is/{ip}",
+  countryLookupAllowPrivate: getBooleanEnv("COUNTRY_LOOKUP_ALLOW_PRIVATE", false),
+  countryLookupCircuitBreakerFailures: Number(process.env.COUNTRY_LOOKUP_CIRCUIT_BREAKER_FAILURES || 5),
+  countryLookupCircuitBreakerResetMs: Number(process.env.COUNTRY_LOOKUP_CIRCUIT_BREAKER_RESET_MS || 30000)
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\config\redis.js =====
+import Redis from "ioredis";
+import { env } from "./env.js";
+
+const baseOptions = {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  connectTimeout: env.redisTimeoutMs,
+  noDelay: true,
+  retryStrategy: (times) => Math.min(times * 500, 5000)
+};
+
+const appRedisOptions = {
+  ...baseOptions,
+  enableOfflineQueue: false,
+  keepAlive: 10000,
+  lazyConnect: true
+};
+
+const bullMqRedisOptions = {
+  ...baseOptions,
+  enableOfflineQueue: true,
+  keepAlive: 10000,
+  lazyConnect: false
+};
+
+const formatRedisError = (error) => {
+  if (!error) {
+    return "Unknown Redis error";
+  }
+
+  return error.code ? `${error.code}: ${error.message}` : error.message;
+};
+
+let redisUnavailableReason = env.redisUrl ? "" : "REDIS_URL is not configured";
+let redisUnavailableLogged = false;
+let lastRedisError = "";
+
+const createRedisClient = (
+  options = appRedisOptions,
+  { logLifecycle = false, updateHealthState = false } = {}
+) => {
+  if (!env.redisUrl) {
+    return null;
+  }
+
+  const client = new Redis(env.redisUrl, options);
+
+  client.on("connect", () => {
+    if (updateHealthState) {
+      redisUnavailableReason = "";
+      redisUnavailableLogged = false;
+      lastRedisError = "";
+    }
+
+    if (logLifecycle) {
+      console.log("Redis connected");
+    }
+  });
+
+  client.on("reconnecting", () => {
+    if (logLifecycle) {
+      console.warn("Redis reconnecting...");
+    }
+  });
+
+  client.on("error", (error) => {
+    if (updateHealthState) {
+      lastRedisError = formatRedisError(error);
+    }
+
+    if (logLifecycle) {
+      console.error("Redis error:", formatRedisError(error));
+    }
+  });
+
+  return client;
+};
+
+const disableRedis = (reason) => {
+  redisUnavailableReason = reason;
+
+  if (redis) {
+    try {
+      redis.disconnect(false);
+    } catch (_error) {
+      // no-op
+    }
+  }
+
+  redis = null;
+
+  if (!redisUnavailableLogged) {
+    console.warn("Redis unavailable, continuing with degraded mode:", reason);
+    redisUnavailableLogged = true;
+  }
+};
+
+export let redis = null;
+
+export const createRedisConnection = (options = appRedisOptions) => createRedisClient(options);
+export const createBullMqRedisConnection = () => createRedisClient(bullMqRedisOptions);
+
+export const isRedisEnabled = () => Boolean(redis);
+
+export const ensureRedisConnection = async () => {
+  if (!env.redisUrl) {
+    disableRedis("REDIS_URL is not configured");
+    return false;
+  }
+
+  if (!redis) {
+    redis = createRedisClient(appRedisOptions, {
+      logLifecycle: true,
+      updateHealthState: true
+    });
+  }
+
+  try {
+    if (redis.status === "wait") {
+      await redis.connect();
+    }
+
+    await redis.ping();
+    redisUnavailableReason = "";
+    redisUnavailableLogged = false;
+    return true;
+  } catch (error) {
+    disableRedis(lastRedisError || formatRedisError(error));
+    return false;
+  }
+};
+
+export const quitRedisConnection = async () => {
+  if (!redis) {
+    return;
+  }
+
+  try {
+    await redis.quit();
+  } catch (_error) {
+    // no-op
+  } finally {
+    redis = null;
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\middleware\auth.middleware.js =====
+import { env } from "../config/env.js";
+import { getUserFromAccessToken } from "../services/auth.service.js";
+import { AppError } from "../utils/AppError.js";
+import { logger } from "../utils/logger.js";
+
+const authLogger = logger.child({ component: "auth.middleware" });
+
+const extractBearerToken = (req) => {
+  const authHeader = req.headers.authorization || "";
+  return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+};
+
+const extractAccessToken = (req) => req.cookies?.[env.accessTokenCookieName] || extractBearerToken(req);
+
+export const authenticate = async (req, _res, next) => {
+  const requestLogger = authLogger.child({
+    requestId: req.requestId,
+    method: req.method,
+    path: req.originalUrl
+  });
+
+  try {
+    const token = extractAccessToken(req);
+
+    if (!token) {
+      throw new AppError("Authentication token is required.", 401);
+    }
+
+    req.user = await getUserFromAccessToken(token);
+    _res.setHeader("Cache-Control", "private, no-store, max-age=0");
+    _res.setHeader("Pragma", "no-cache");
+
+    requestLogger.debug("auth.verify.succeeded", {
+      userId: req.user.uid,
+      authProvider: req.user.authProvider
+    });
+
+    next();
+  } catch (error) {
+    requestLogger.warn("auth.verify.failed", {
+      error
+    });
+
+    next(
+      error instanceof AppError
+        ? error
+        : new AppError("Invalid or expired authentication token.", 401)
+    );
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\middleware\error.middleware.js =====
+import { logger } from "../utils/logger.js";
+
+export const notFoundHandler = (_req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found."
+  });
+};
+
+export const errorHandler = (error, req, res, _next) => {
+  const statusCode = error.statusCode || 500;
+  const level = statusCode >= 500 ? "error" : "warn";
+  const isServerError = statusCode >= 500;
+  const clientMessage = isServerError ? "Internal server error." : error.message || "Request failed.";
+  const clientDetails = isServerError ? null : error.details || null;
+
+  (req?.log || logger).log(level, "http.request.failed", {
+    statusCode,
+    errorName: error?.name,
+    message: error?.message || "Internal server error",
+    details: error?.details || null,
+    stack: statusCode >= 500 ? error?.stack : undefined
+  });
+
+  res.status(statusCode).json({
+    success: false,
+    message: clientMessage,
+    details: clientDetails
+  });
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\middleware\rateLimit.middleware.js =====
+import rateLimit from "express-rate-limit";
+import { env } from "../config/env.js";
+import { logger } from "../utils/logger.js";
+
+const rateLimitLogger = logger.child({ component: "rate-limit" });
+
+const getClientIp = (req) => {
+  const forwardedFor = req.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  return req.ip || req.socket?.remoteAddress || "unknown";
+};
+
+const buildKeyGenerator = (keySelector) => (req) => {
+  const key = keySelector(req);
+  return typeof key === "string" && key.trim() ? key.trim() : getClientIp(req);
+};
+
+const createLimiter = ({ scope, windowMs, max, keySelector, message }) => {
+  const keyGenerator = buildKeyGenerator(keySelector);
+
+  return rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+    handler: (req, res) => {
+      const key = keyGenerator(req);
+
+      (req.log || rateLimitLogger).warn("rate_limit.blocked", {
+        scope,
+        key,
+        max,
+        windowMs
+      });
+
+      res.status(429).json({
+        success: false,
+        message
+      });
+    }
+  });
+};
+
+export const redirectRateLimiter = createLimiter({
+  scope: "redirect",
+  windowMs: 60 * 1000,
+  max: env.redirectRateLimitPerMinute,
+  keySelector: (req) => getClientIp(req),
+  message: "Too many redirect requests. Please try again shortly."
+});
+
+export const protectedApiRateLimiter = createLimiter({
+  scope: "authenticated_api",
+  windowMs: 60 * 1000,
+  max: env.authenticatedApiRateLimitPerMinute,
+  keySelector: (req) => req.user?.uid || getClientIp(req),
+  message: "Too many requests right now. Please wait a moment and try again."
+});
+
+export const linkCreateRateLimiter = createLimiter({
+  scope: "link_create",
+  windowMs: 60 * 1000,
+  max: env.linkCreateRateLimitPerMinute,
+  keySelector: (req) => req.user?.uid || getClientIp(req),
+  message: "Too many create requests. Try again in a minute."
+});
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\middleware\validate.middleware.js =====
+import { ZodError } from "zod";
+import { AppError } from "../utils/AppError.js";
+
+const formatIssues = (issues) => issues.map((issue) => ({
+  path: issue.path.join(".") || "root",
+  message: issue.message
+}));
+
+const parseSection = async (schema, value) => schema.parseAsync(value ?? {});
+
+export const validateRequest = ({ body, params, query } = {}) => async (req, _res, next) => {
+  try {
+    if (body) {
+      req.body = await parseSection(body, req.body);
+    }
+
+    if (params) {
+      req.params = await parseSection(params, req.params);
+    }
+
+    if (query) {
+      req.query = await parseSection(query, req.query);
+    }
+
+    next();
+  } catch (error) {
+    if (error instanceof ZodError) {
+      next(new AppError("Invalid request data.", 400, formatIssues(error.issues)));
+      return;
+    }
+
+    next(error);
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\models\AuthSession.js =====
+import mongoose from "mongoose";
+
+const authSessionSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: String,
+      required: true,
+      index: true,
+      trim: true
+    },
+    tokenHash: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    expiresAt: {
+      type: Date,
+      required: true,
+      index: true
+    },
+    userAgent: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    createdFromIp: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    lastUsedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+authSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+export const AuthSession = mongoose.models.AuthSession || mongoose.model("AuthSession", authSessionSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\models\ClickEvent.js =====
+import mongoose from "mongoose";
+
+const clickEventSchema = new mongoose.Schema(
+  {
+    eventId: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true
+    },
+    code: {
+      type: String,
+      required: true,
+      index: true,
+      trim: true
+    },
+    userId: {
+      type: String,
+      index: true,
+      trim: true
+    },
+    clickedAt: {
+      type: Date,
+      required: true,
+      index: true
+    },
+    referrer: {
+      type: String,
+      required: true,
+      default: "Direct",
+      trim: true
+    },
+    browser: {
+      type: String,
+      required: true,
+      default: "Unknown",
+      trim: true
+    },
+    deviceType: {
+      type: String,
+      required: true,
+      default: "desktop",
+      trim: true
+    },
+    country: {
+      type: String,
+      required: true,
+      default: "Unknown",
+      trim: true
+    },
+    clientIp: {
+      type: String,
+      required: true,
+      default: "unknown",
+      trim: true
+    },
+    requestId: {
+      type: String,
+      trim: true
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+clickEventSchema.index({ code: 1, clickedAt: -1 });
+clickEventSchema.index({ userId: 1, clickedAt: -1 });
+clickEventSchema.index({ clickedAt: -1 });
+
+export const ClickEvent = mongoose.models.ClickEvent || mongoose.model("ClickEvent", clickEventSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\models\Url.js =====
+import mongoose from "mongoose";
+
+const urlSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    longUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    normalizedUrl: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      trim: true,
+      maxlength: 80
+    },
+    userId: {
+      type: String,
+      required: true,
+      index: true
+    },
+    userEmail: {
+      type: String,
+      trim: true
+    },
+    customAlias: {
+      type: Boolean,
+      default: false
+    },
+    expiry: {
+      type: Date,
+      default: null
+    },
+    isActive: {
+      type: Boolean,
+      default: true
+    },
+    clickCount: {
+      type: Number,
+      default: 0
+    },
+    lastClickedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+urlSchema.index({ userId: 1, createdAt: -1 });
+
+export const Url = mongoose.models.Url || mongoose.model("Url", urlSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\models\User.js =====
+import mongoose from "mongoose";
+
+const userSchema = new mongoose.Schema(
+  {
+    uid: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      lowercase: true,
+      trim: true
+    },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: ""
+    },
+    authProvider: {
+      type: String,
+      enum: ["email", "google"],
+      required: true,
+      default: "email"
+    },
+    passwordHash: {
+      type: String,
+      default: ""
+    }
+  },
+  {
+    timestamps: true
+  }
+);
+
+export const User = mongoose.models.User || mongoose.model("User", userSchema);
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\routes\health.routes.js =====
+import { Router } from "express";
+
+const router = Router();
+
+router.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    message: "PKLinks API is healthy",
+    timestamp: new Date().toISOString()
+  });
+});
+
+export default router;
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\services\auth.service.js =====
+import { createHash, randomUUID } from "crypto";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { env } from "../config/env.js";
+import { AuthSession } from "../models/AuthSession.js";
+import { User } from "../models/User.js";
+import { AppError } from "../utils/AppError.js";
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GOOGLE_OAUTH_SCOPE = "openid email profile";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
+const PKLINKS_ISSUER = "pklinks";
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+const normalizeName = (value) => String(value || "").trim();
+const hashValue = (value) => createHash("sha256").update(String(value || "")).digest("hex");
+
+const parseDurationToMs = (value, fallbackMs) => {
+  const normalized = String(value || "").trim();
+
+  if (!normalized) {
+    return fallbackMs;
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
+  const match = normalized.match(/^(\d+)(ms|s|m|h|d)$/i);
+
+  if (!match) {
+    return fallbackMs;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000
+  };
+
+  return amount * multipliers[unit];
+};
+
+const getRefreshExpiryDate = () => {
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + env.refreshTokenTtlDays);
+  return expiresAt;
+};
+
+const sanitizeReturnTo = (value, fallback = "/dashboard") => {
+  const normalized = String(value || "").trim();
+
+  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
+    return fallback;
+  }
+
+  return normalized;
+};
+
+const requireGoogleOAuthConfig = () => {
+  if (!env.googleClientId || !env.googleClientSecret || !env.googleOauthRedirectUri) {
+    throw new AppError("Google sign-in is not configured on the server.", 500);
+  }
+};
+
+const getAccessTokenPayload = (user) => ({
+  sub: user.uid,
+  email: user.email || "",
+  name: user.name || "",
+  authProvider: user.authProvider,
+  type: "access"
+});
+
+const getGoogleStatePayload = ({ nonce, returnTo }) => ({
+  nonce,
+  returnTo: sanitizeReturnTo(returnTo),
+  type: "google_oauth_state"
+});
+
+const isSecureCookieRequest = (req) => {
+  const forwardedProto = String(req?.get?.("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  if (forwardedProto) {
+    return forwardedProto === "https";
+  }
+
+  if (req?.secure) {
+    return true;
+  }
+
+  return env.frontendUrl.startsWith("https://");
+};
+
+const getCookieBaseOptions = (req) => ({
+  httpOnly: true,
+  secure: isSecureCookieRequest(req)
+});
+
+const getFrontendRedirectUrl = (path) => `${env.frontendUrl.replace(/\/$/, "")}${path}`;
+
+export const createAccessToken = (user) => jwt.sign(
+  getAccessTokenPayload(user),
+  env.jwtAccessTokenSecret,
+  {
+    expiresIn: env.jwtAccessTokenTtl,
+    issuer: PKLINKS_ISSUER
+  }
+);
+
+export const verifyAccessToken = (token) => jwt.verify(token, env.jwtAccessTokenSecret, {
+  issuer: PKLINKS_ISSUER
+});
+
+export const createGoogleStateToken = ({ nonce, returnTo }) => jwt.sign(
+  getGoogleStatePayload({ nonce, returnTo }),
+  env.googleOauthStateSecret,
+  {
+    expiresIn: env.googleOauthStateTtl,
+    issuer: PKLINKS_ISSUER
+  }
+);
+
+export const verifyGoogleStateToken = (token) => jwt.verify(token, env.googleOauthStateSecret, {
+  issuer: PKLINKS_ISSUER
+});
+
+export const buildPublicUser = (user) => ({
+  uid: user.uid,
+  email: user.email || "",
+  name: user.name || "",
+  authProvider: user.authProvider
+});
+
+export const getAccessCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "strict",
+  path: "/api",
+  maxAge: parseDurationToMs(env.jwtAccessTokenTtl, 15 * 60 * 1000)
+});
+
+export const getRefreshCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "strict",
+  path: "/api/auth",
+  maxAge: env.refreshTokenTtlDays * 24 * 60 * 60 * 1000
+});
+
+export const getGoogleStateCookieOptions = (req) => ({
+  ...getCookieBaseOptions(req),
+  sameSite: "lax",
+  path: "/api/auth/google",
+  maxAge: parseDurationToMs(env.googleOauthStateTtl, 10 * 60 * 1000)
+});
+
+const buildSessionPayload = async (user, req, currentSession = null) => {
+  const accessToken = createAccessToken(user);
+  const refreshToken = randomUUID();
+  const expiresAt = getRefreshExpiryDate();
+
+  await AuthSession.create({
+    userId: user.uid,
+    tokenHash: hashValue(refreshToken),
+    expiresAt,
+    userAgent: req.get("user-agent") || "",
+    createdFromIp: req.ip || "",
+    lastUsedAt: new Date()
+  });
+
+  if (currentSession) {
+    await AuthSession.deleteOne({ _id: currentSession._id });
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+    user: buildPublicUser(user)
+  };
+};
+
+export const clearRefreshSession = async (refreshToken) => {
+  if (!refreshToken) {
+    return;
+  }
+
+  await AuthSession.deleteOne({ tokenHash: hashValue(refreshToken) });
+};
+
+export const signupWithEmailPassword = async ({ email, password, fullName }, req) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = normalizeName(fullName);
+  const trimmedPassword = String(password || "");
+
+  if (!EMAIL_REGEX.test(normalizedEmail)) {
+    throw new AppError("Please enter a valid email address.", 400);
+  }
+
+  if (trimmedPassword.length < 6) {
+    throw new AppError("Use at least 6 characters for your password.", 400);
+  }
+
+  const existingUser = await User.findOne({ email: normalizedEmail }).lean();
+
+  if (existingUser) {
+    if (existingUser.authProvider === "google") {
+      throw new AppError("That email already uses Google sign-in.", 409);
+    }
+
+    throw new AppError("An account already exists for that email.", 409);
+  }
+
+  const passwordHash = await bcrypt.hash(trimmedPassword, 12);
+  const user = await User.create({
+    uid: randomUUID(),
+    email: normalizedEmail,
+    name: normalizedName,
+    authProvider: "email",
+    passwordHash
+  });
+
+  return buildSessionPayload(user, req);
+};
+
+export const loginWithEmailPassword = async ({ email, password }, req) => {
+  const normalizedEmail = normalizeEmail(email);
+  const trimmedPassword = String(password || "");
+
+  if (!EMAIL_REGEX.test(normalizedEmail) || !trimmedPassword) {
+    throw new AppError("Email and password are required.", 400);
+  }
+
+  const user = await User.findOne({ email: normalizedEmail });
+
+  if (user?.authProvider === "google") {
+    throw new AppError("Use Google sign-in for this account.", 401);
+  }
+
+  if (!user || user.authProvider !== "email" || !user.passwordHash) {
+    throw new AppError("Invalid email or password.", 401);
+  }
+
+  const passwordMatches = await bcrypt.compare(trimmedPassword, user.passwordHash);
+
+  if (!passwordMatches) {
+    throw new AppError("Invalid email or password.", 401);
+  }
+
+  return buildSessionPayload(user, req);
+};
+
+export const refreshSession = async (refreshToken, req) => {
+  if (!refreshToken) {
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  const currentSession = await AuthSession.findOne({
+    tokenHash: hashValue(refreshToken)
+  });
+
+  if (!currentSession || currentSession.expiresAt.getTime() <= Date.now()) {
+    if (currentSession) {
+      await AuthSession.deleteOne({ _id: currentSession._id });
+    }
+
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  const user = await User.findOne({ uid: currentSession.userId });
+
+  if (!user) {
+    await AuthSession.deleteOne({ _id: currentSession._id });
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  currentSession.lastUsedAt = new Date();
+  await currentSession.save();
+
+  return buildSessionPayload(user, req, currentSession);
+};
+
+export const syncGoogleUser = async ({ uid, email, name }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = normalizeName(name);
+
+  if (!uid) {
+    throw new AppError("Authentication is required.", 401);
+  }
+
+  let user = await User.findOne({ uid });
+
+  if (!user && normalizedEmail) {
+    user = await User.findOne({ email: normalizedEmail });
+  }
+
+  if (!user) {
+    user = await User.create({
+      uid,
+      email: normalizedEmail,
+      name: normalizedName,
+      authProvider: "google"
+    });
+  } else {
+    if (user.authProvider === "email" && user.uid !== uid) {
+      throw new AppError("Use email sign-in for this account.", 409);
+    }
+
+    user.uid = uid;
+    user.email = normalizedEmail || user.email;
+    user.name = normalizedName || user.name;
+    user.authProvider = "google";
+    await user.save();
+  }
+
+  return user;
+};
+
+export const getUserFromAccessToken = async (token) => {
+  const decoded = verifyAccessToken(token);
+
+  if (decoded?.type !== "access" || !decoded?.sub) {
+    throw new AppError("Invalid or expired authentication token.", 401);
+  }
+
+  const user = await User.findOne({ uid: decoded.sub }).lean();
+
+  if (!user) {
+    throw new AppError("Invalid or expired authentication token.", 401);
+  }
+
+  return buildPublicUser(user);
+};
+
+export const beginGoogleOAuth = (returnTo = "/dashboard") => {
+  requireGoogleOAuthConfig();
+
+  const nonce = randomUUID();
+  const stateToken = createGoogleStateToken({
+    nonce,
+    returnTo
+  });
+
+  const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authorizationUrl.searchParams.set("client_id", env.googleClientId);
+  authorizationUrl.searchParams.set("redirect_uri", env.googleOauthRedirectUri);
+  authorizationUrl.searchParams.set("response_type", "code");
+  authorizationUrl.searchParams.set("scope", GOOGLE_OAUTH_SCOPE);
+  authorizationUrl.searchParams.set("state", stateToken);
+  authorizationUrl.searchParams.set("prompt", "select_account");
+
+  return {
+    authorizationUrl: authorizationUrl.toString(),
+    stateNonceHash: hashValue(nonce)
+  };
+};
+
+const exchangeGoogleCode = async (code) => {
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      code,
+      client_id: env.googleClientId,
+      client_secret: env.googleClientSecret,
+      redirect_uri: env.googleOauthRedirectUri,
+      grant_type: "authorization_code"
+    })
+  });
+
+  if (!response.ok) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  return response.json();
+};
+
+const fetchGoogleUserProfile = async (googleAccessToken) => {
+  const response = await fetch(GOOGLE_USERINFO_URL, {
+    headers: {
+      authorization: `Bearer ${googleAccessToken}`
+    }
+  });
+
+  if (!response.ok) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const profile = await response.json();
+
+  if (!profile?.sub || !profile?.email || profile.email_verified !== true) {
+    throw new AppError("Google sign-in did not return a verified email address.", 401);
+  }
+
+  return profile;
+};
+
+export const completeGoogleOAuth = async ({
+  code,
+  stateToken,
+  stateNonceHash,
+  req
+}) => {
+  requireGoogleOAuthConfig();
+
+  if (!code || !stateToken || !stateNonceHash) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const decodedState = verifyGoogleStateToken(stateToken);
+
+  if (decodedState?.type !== "google_oauth_state" || hashValue(decodedState.nonce) !== stateNonceHash) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const googleTokenData = await exchangeGoogleCode(code);
+
+  if (!googleTokenData?.access_token) {
+    throw new AppError("Google sign-in could not be completed.", 401);
+  }
+
+  const googleProfile = await fetchGoogleUserProfile(googleTokenData.access_token);
+  const user = await syncGoogleUser({
+    uid: googleProfile.sub,
+    email: googleProfile.email,
+    name: googleProfile.name
+  });
+
+  return buildSessionPayload(user, req);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\services\cache.service.js =====
+import { redis } from "../config/redis.js";
+import { logger } from "../utils/logger.js";
+
+const CACHE_PREFIX = "pklinks:code:";
+const NEGATIVE_CACHE_VALUE = "__missing__";
+const cacheLogger = logger.child({ component: "cache" });
+
+const getCacheKey = (code) => `${CACHE_PREFIX}${code}`;
+
+const getTTLFromExpiry = (expiry) => {
+  if (!expiry) {
+    return 60 * 60 * 24 * 7;
+  }
+
+  const ttlSeconds = Math.floor((new Date(expiry).getTime() - Date.now()) / 1000);
+  return Math.max(ttlSeconds, 60);
+};
+
+export const readUrlFromCache = async (code, context = {}) => {
+  const requestLogger = cacheLogger.child({ code, ...context });
+
+  if (!redis) {
+    requestLogger.debug("cache.read.redis_unavailable");
+    return { status: "miss", value: null };
+  }
+
+  try {
+    const rawValue = await redis.get(getCacheKey(code));
+
+    if (!rawValue) {
+      requestLogger.debug("cache.read.miss");
+      return { status: "miss", value: null };
+    }
+
+    if (rawValue === NEGATIVE_CACHE_VALUE) {
+      requestLogger.debug("cache.read.negative_hit");
+      return { status: "negative", value: null };
+    }
+
+    requestLogger.debug("cache.read.hit");
+
+    return { status: "hit", value: JSON.parse(rawValue) };
+  } catch (error) {
+    requestLogger.warn("cache.read.failed", {
+      error
+    });
+    return { status: "miss", value: null };
+  }
+};
+
+export const writeUrlToCache = async (urlRecord, context = {}) => {
+  const ttlSeconds = getTTLFromExpiry(urlRecord.expiry);
+  const requestLogger = cacheLogger.child({ code: urlRecord.code, ...context });
+
+  if (!redis) {
+    requestLogger.debug("cache.write.redis_unavailable", {
+      ttlSeconds
+    });
+    return;
+  }
+
+  try {
+    await redis.set(
+      getCacheKey(urlRecord.code),
+      JSON.stringify({
+        code: urlRecord.code,
+        longUrl: urlRecord.longUrl,
+        expiry: urlRecord.expiry,
+        isActive: urlRecord.isActive
+      }),
+      "EX",
+      ttlSeconds
+    );
+
+    requestLogger.debug("cache.write.success", {
+      ttlSeconds,
+      isActive: urlRecord.isActive
+    });
+  } catch (error) {
+    requestLogger.warn("cache.write.failed", {
+      ttlSeconds,
+      error
+    });
+  }
+};
+
+export const writeNegativeCache = async (code, context = {}) => {
+  const requestLogger = cacheLogger.child({ code, ...context });
+
+  if (!redis) {
+    requestLogger.debug("cache.write_negative.redis_unavailable");
+    return;
+  }
+
+  try {
+    await redis.set(getCacheKey(code), NEGATIVE_CACHE_VALUE, "EX", 60);
+    requestLogger.debug("cache.write_negative.success");
+  } catch (error) {
+    requestLogger.warn("cache.write_negative.failed", {
+      error
+    });
+  }
+};
+
+export const invalidateUrlCache = async (code, context = {}) => {
+  const requestLogger = cacheLogger.child({ code, ...context });
+
+  if (!redis) {
+    requestLogger.debug("cache.invalidate.redis_unavailable");
+    return;
+  }
+
+  try {
+    await redis.del(getCacheKey(code));
+    requestLogger.debug("cache.invalidate.success");
+  } catch (error) {
+    requestLogger.warn("cache.invalidate.failed", {
+      error
+    });
+  }
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\services\country.service.js =====
+const UNKNOWN_COUNTRY = "Unknown";
+
+const countryNameLookup = typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function"
+  ? new Intl.DisplayNames(["en"], { type: "region" })
+  : null;
+
+export const normalizeCountryLabel = (value) => {
+  const normalized = String(value || "").trim().toUpperCase();
+
+  if (!normalized || normalized === "XX" || normalized === "UNKNOWN" || normalized === "ZZ") {
+    return UNKNOWN_COUNTRY;
+  }
+
+  if (/^[A-Z]{2}$/.test(normalized) && countryNameLookup) {
+    return countryNameLookup.of(normalized) || normalized;
+  }
+
+  return String(value || "").trim() || UNKNOWN_COUNTRY;
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\utils\AppError.js =====
+export class AppError extends Error {
+  constructor(message, statusCode = 500, details = null) {
+    super(message);
+    this.name = "AppError";
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+}
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\utils\asyncHandler.js =====
+export const asyncHandler = (handler) => (req, res, next) => {
+  Promise.resolve(handler(req, res, next)).catch(next);
+};
+
+===== FILE: E:\NEXT JS\2025 NEW\pklinks-platform\apps\shared\src\utils\logger.js =====
+import { randomUUID } from "crypto";
+import morgan from "morgan";
+
+const LEVELS = new Set(["debug", "info", "warn", "error"]);
+
+const serialize = (value) => {
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack
+    };
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(serialize);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([key, entryValue]) => [key, serialize(entryValue)])
+    );
+  }
+
+  return value;
+};
+
+const emit = (level, message, meta = {}) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...serialize(meta)
+  };
+
+  const output = level === "error" || level === "warn" ? console.error : console.log;
+  output(JSON.stringify(entry));
+};
+
+const buildLogger = (baseMeta = {}) => {
+  const childLogger = {
+    debug: (message, meta) => emit("debug", message, { ...baseMeta, ...meta }),
+    info: (message, meta) => emit("info", message, { ...baseMeta, ...meta }),
+    warn: (message, meta) => emit("warn", message, { ...baseMeta, ...meta }),
+    error: (message, meta) => emit("error", message, { ...baseMeta, ...meta }),
+    child: (childMeta = {}) => buildLogger({ ...baseMeta, ...childMeta }),
+    log: ({ level = "info", message = "log", ...meta } = {}) => {
+      const normalizedLevel = LEVELS.has(level) ? level : "info";
+      emit(normalizedLevel, message, { ...baseMeta, ...meta });
+    }
+  };
+
+  return childLogger;
+};
+
+export const logger = buildLogger({ service: "pklinks" });
+
+export const createRequestLoggerMiddleware = ({ component, logStart = false } = {}) => (req, res, next) => {
+  req.requestId = req.get("x-request-id") || randomUUID();
+  req.log = logger.child({
+    component,
+    requestId: req.requestId,
+    method: req.method,
+    path: req.originalUrl
+  });
+
+  res.setHeader("x-request-id", req.requestId);
+
+  if (logStart) {
+    req.log.debug("request.started", {
+      ip: req.ip || "unknown",
+      userAgent: req.get("user-agent") || "unknown"
+    });
+  }
+
+  return morgan(
+    (tokens, request, response) => [
+      tokens.date(request, response, "iso"),
+      tokens.method(request, response),
+      tokens.url(request, response),
+      tokens.status(request, response),
+      `${Number(tokens["response-time"](request, response) || 0).toFixed(3)}ms`,
+      `requestId=${JSON.stringify(req.requestId)}`,
+      component ? `component=${JSON.stringify(component)}` : ""
+    ].filter(Boolean).join(" "),
+    {
+      stream: {
+        write: (line) => {
+          const normalized = String(line || "").trim();
+
+          if (!normalized) {
+            return;
+          }
+
+          console.log(normalized);
+        }
+      }
+    }
+  )(req, res, next);
+};
