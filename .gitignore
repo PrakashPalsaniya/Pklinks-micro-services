@@ -1,0 +1,118 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PKLinks Platform — Root .gitignore
+# Covers the entire monorepo (root, backend, frontend)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Dependencies ───────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+
+# ── Environment & Secrets ──────────────────────────────────────────────────────
+# NEVER commit .env files — they contain passwords and API keys
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+
+# Backend root + each service
+backend/.env
+backend/.env.*
+backend/*/.env
+backend/*/.env.*
+
+# Frontend
+frontend/.env
+frontend/.env.*
+
+
+# ── Build Outputs ──────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+*.tsbuildinfo
+
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+
+# ── Runtime & Cache ────────────────────────────────────────────────────────────
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.pid
+*.seed
+*.pid.lock
+
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+
+# ── IDEs & Editors ────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+
+# ── OS Files ──────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Don't ignore docker-compose files — they are source code
+# Only ignore local override files with secrets
+docker-compose.override.yml
+
+
+# ── Temporary / Dev Artifacts ─────────────────────────────────────────────────
+scratch/
+*/scratch/
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+
+# ── Package Manager Locks (keep these!) ───────────────────────────────────────
+# package-lock.json  ← DO NOT ignore, commit this
+# yarn.lock          ← DO NOT ignore, commit this
