@@ -1,5 +1,7 @@
 # 🔗 PKLinks Platform
 
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Pklinks--micro--services-blue?logo=github)](https://github.com/PrakashPalsaniya/Pklinks-micro-services) [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green?logo=node.js)](https://nodejs.org)
+
 PKLinks is a high-performance, microservices-based URL shortener and analytics platform. It features robust user authentication, high-speed cached redirections, and asynchronous background analytics processing.
 
 ## 🏛️ Architecture Overview
@@ -156,6 +158,7 @@ npm run dev
 | **Auth Service** | `3001` | Handles Registration, Login, JWTs |
 | **Link Service** | `3002` | Handles Link CRUD & short code generation |
 | **Redirect Service** | `3003` | Resolves short codes to long URLs |
+| **Analytics Worker** | `3004` | Background worker for async click processing |
 | **Analytics API** | `3005` | Serves dashboard metrics & charts |
 | **MongoDB** | `27017` | Primary Database |
 | **Redis** | `6379` | High-speed Caching |
