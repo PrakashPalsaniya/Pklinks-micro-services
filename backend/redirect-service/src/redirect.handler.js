@@ -26,7 +26,7 @@ export async function handleRedirect(redis, req, res) {
       return res.status(429).json({ message: 'Too many requests. Slow down.' });
     }
   } catch (e) {
-    console.log('Rate limit error:', e.message);
+    console.error('Rate limit error:', e.message);
   }
 
   // 2. Try to get from cache (Fast Path)
@@ -42,7 +42,7 @@ export async function handleRedirect(redis, req, res) {
       return res.redirect(302, cached);
     }
   } catch (e) {
-    console.log('Cache error:', e.message);
+    console.error('Cache error:', e.message);
   }
 
   // 3. Fallback to Database (Slow Path)
@@ -80,8 +80,15 @@ export async function getRedirectInfo(redis, req, res) {
     const link = await Url.findOne({ code, isActive: true }).lean();
     if (!link) return res.status(404).json({ message: 'Link not found' });
 
+    // Check if the link has expired before returning it
+    const now = new Date();
+    if (link.expiresAt && link.expiresAt <= now) {
+      return res.status(410).json({ message: 'Link has expired' });
+    }
+
     return res.json({ originalUrl: link.originalUrl });
   } catch (err) {
+    console.error('getRedirectInfo error:', err);
     return res.status(500).json({ message: 'Error fetching link info' });
   }
 }
