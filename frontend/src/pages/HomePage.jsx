@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { BrandMark } from "../components/BrandMark";
 
 export function HomePage() {
   const { user, loading } = useAuth();
@@ -43,12 +44,7 @@ export function HomePage() {
       {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 sm:px-8 h-16 bg-base/60 backdrop-blur-md border-b border-white/5">
         <Link className="flex items-center gap-2 text-decoration-none" to="/">
-          <div className="w-8 h-8 bg-gradient-to-br from-accent to-purple-500 rounded-lg flex items-center justify-center text-sm font-semibold text-white">
-            🔗
-          </div>
-          <span className="text-lg font-bold tracking-tight text-ink">
-            PK<span className="font-mono text-transparent bg-clip-text bg-gradient-to-r from-accent to-purple-500">Links</span>
-          </span>
+          <BrandMark />
         </Link>
         
         <ul className="hidden sm:flex items-center gap-8 list-none">
@@ -248,7 +244,7 @@ export function HomePage() {
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-ink mb-3 relative z-10">
               Your first short link is one click away
             </h2>
-            <p className="text-zinc-400 text-sm sm:text-base mb-8 relative z-10">
+            <p className="text-zinc-200 text-sm sm:text-base mb-8 relative z-10 font-medium">
               No credit card. No account. Just paste and go.
             </p>
             <div className="flex justify-center relative z-10">
