@@ -6,6 +6,7 @@ import { Skeleton } from "../components/ui/Skeleton";
 import { useAuth } from "../hooks/useAuth";
 import { setAccessToken } from "../api/tokenStore";
 
+const HomePage = lazy(() => import("../pages/HomePage").then((module) => ({ default: module.HomePage })));
 const AuthLayout = lazy(() => import("../pages/auth/AuthLayout").then((module) => ({ default: module.AuthLayout })));
 const LoginPage = lazy(() => import("../pages/auth/LoginPage").then((module) => ({ default: module.LoginPage })));
 const SignupPage = lazy(() => import("../pages/auth/SignupPage").then((module) => ({ default: module.SignupPage })));
@@ -45,14 +46,6 @@ function withSuspense(element, fallback = <RouteFallback />) {
   return <Suspense fallback={fallback}>{element}</Suspense>;
 }
 
-function RootRedirect() {
-  const { user, loading } = useAuth();
-
-  if (loading) return null;
-
-  return <Navigate to={user ? "/dashboard" : "/login"} replace />;
-}
-
 function PublicOnlyRoute() {
   const { user, loading } = useAuth();
 
@@ -67,7 +60,7 @@ export function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<RootRedirect />} />
+        <Route path="/" element={withSuspense(<HomePage />)} />
         <Route path="/r/:code" element={withSuspense(<RedirectPage />)} />
 
         <Route element={<PublicOnlyRoute />}>
