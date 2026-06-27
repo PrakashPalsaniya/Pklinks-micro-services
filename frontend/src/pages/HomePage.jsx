@@ -71,11 +71,6 @@ export function HomePage() {
               Start shortening for free
             </Button>
           </Link>
-          <a href="https://github.com" target="_blank" rel="noreferrer" className="w-full sm:w-auto">
-            <Button variant="secondary" size="lg" className="w-full sm:w-auto">
-              View Documentation
-            </Button>
-          </a>
         </div>
 
         {/* Feature Grid */}

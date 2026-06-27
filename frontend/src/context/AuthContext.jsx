@@ -40,6 +40,12 @@ export function AuthProvider({ children }) {
     const response = await fetchCurrentUser();
     // Backend returns: { user: { id, email, displayName, createdAt } }
     const profile = response?.user || response;
+    
+    // Prevent "fake login" if a misconfigured proxy or CDN returns HTML instead of JSON
+    if (!profile || typeof profile !== 'object' || (!profile.id && !profile._id && !profile.email)) {
+      throw new Error("Invalid session data received from server");
+    }
+
     setUser(profile);
     return profile;
   }, []);
