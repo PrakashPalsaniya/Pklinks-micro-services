@@ -43,7 +43,7 @@ export function AuthProvider({ children }) {
     
     // Prevent "fake login" if a misconfigured proxy or CDN returns HTML instead of JSON
     if (!profile || typeof profile !== 'object' || (!profile.id && !profile._id && !profile.email)) {
-      throw new Error("Invalid session data received from server");
+      throw new Error("We couldn't connect to the server right now. Please try again later.");
     }
 
     setUser(profile);
