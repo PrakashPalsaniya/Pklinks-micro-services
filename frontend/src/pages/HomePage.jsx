@@ -143,7 +143,7 @@ export function HomePage() {
           <p className="font-mono text-[0.75rem] font-semibold text-accent tracking-widest uppercase mb-3">
             features
           </p>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight mb-3">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-ink mb-3">
             Everything a short link needs to be
           </h2>
           <p className="text-base text-zinc-400 max-w-[480px] leading-relaxed mb-12">
@@ -155,7 +155,7 @@ export function HomePage() {
               <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-lg mb-4">
                 ⚡
               </div>
-              <h3 className="text-base font-semibold mb-2">Instant Shortening</h3>
+              <h3 className="text-base font-semibold text-ink mb-2">Instant Shortening</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 Paste. Click. Done. Your short link is live in under a second, no account needed to start.
               </p>
@@ -165,7 +165,7 @@ export function HomePage() {
               <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-lg mb-4">
                 📊
               </div>
-              <h3 className="text-base font-semibold mb-2">Click Analytics</h3>
+              <h3 className="text-base font-semibold text-ink mb-2">Click Analytics</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 See exactly who clicked, from where, on what device — in a clean real-time dashboard.
               </p>
@@ -175,7 +175,7 @@ export function HomePage() {
               <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-lg mb-4">
                 ✏️
               </div>
-              <h3 className="text-base font-semibold mb-2">Custom Aliases</h3>
+              <h3 className="text-base font-semibold text-ink mb-2">Custom Aliases</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 Replace random slugs with readable ones. <span className="font-mono text-accentHover text-xs">pklinks.in/launch</span> beats a hash every time.
               </p>
@@ -185,7 +185,7 @@ export function HomePage() {
               <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center text-lg mb-4">
                 ⏳
               </div>
-              <h3 className="text-base font-semibold mb-2">Link Expiry</h3>
+              <h3 className="text-base font-semibold text-ink mb-2">Link Expiry</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 Set an expiry date or a click limit. Perfect for time-sensitive campaigns and invites.
               </p>
@@ -198,7 +198,7 @@ export function HomePage() {
           <p className="font-mono text-[0.75rem] font-semibold text-accent tracking-widest uppercase mb-3">
             how it works
           </p>
-          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight mb-3">
+          <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight text-ink mb-3">
             Three steps, zero friction
           </h2>
           <p className="text-base text-zinc-400 max-w-[480px] leading-relaxed mb-12">
@@ -208,33 +208,33 @@ export function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative">
             <div className="flex flex-col gap-3">
               <span className="font-mono text-xs text-accent font-semibold">01</span>
-              <h3 className="text-base font-semibold">Paste your URL</h3>
+              <h3 className="text-base font-semibold text-ink">Paste your URL</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 Drop any link into the box — blog posts, product pages, Google Drive files, anything.
               </p>
-              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-500">
+              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-400 break-all leading-normal">
                 <span className="text-accentHover">→</span> https://docs.google.com/spreadsheets/d/1aBcDeFgHiJkLmN...
               </div>
             </div>
 
             <div className="flex flex-col gap-3">
               <span className="font-mono text-xs text-accent font-semibold">02</span>
-              <h3 className="text-base font-semibold">Get your short link</h3>
+              <h3 className="text-base font-semibold text-ink">Get your short link</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 PKLinks generates a short alias instantly. Customize it or keep the auto-generated slug.
               </p>
-              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-500">
+              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-400 break-all leading-normal">
                 <span className="text-accentHover">✓</span> pklinks.in/<span className="text-accentHover">q3-report</span>
               </div>
             </div>
 
             <div className="flex flex-col gap-3">
               <span className="font-mono text-xs text-accent font-semibold">03</span>
-              <h3 className="text-base font-semibold">Share & track</h3>
+              <h3 className="text-base font-semibold text-ink">Share & track</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 Copy, share anywhere, and watch click data roll in from your analytics dashboard.
               </p>
-              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-500">
+              <div className="mt-2 bg-white/5 border border-white/10 rounded-xl p-3 font-mono text-[0.78rem] text-zinc-400 break-all leading-normal">
                 <span className="text-accentHover">📈</span> 142 clicks · 12 countries · 68% mobile
               </div>
             </div>
@@ -245,7 +245,7 @@ export function HomePage() {
         <section className="w-full max-w-[1100px] mx-auto mb-24 px-6 sm:px-8">
           <div className="relative overflow-hidden bg-gradient-to-br from-accent/10 to-purple-500/5 border border-accent/20 rounded-[24px] py-16 px-6 sm:px-12 text-center">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(99,102,241,0.08)_0%,transparent_60%)] pointer-events-none" />
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mb-3 relative z-10">
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-ink mb-3 relative z-10">
               Your first short link is one click away
             </h2>
             <p className="text-zinc-400 text-sm sm:text-base mb-8 relative z-10">
