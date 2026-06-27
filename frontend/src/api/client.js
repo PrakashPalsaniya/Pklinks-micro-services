@@ -15,6 +15,15 @@ export function getAbsoluteApiBaseUrl() {
 // Build proxy redirect URL
 export function buildRedirectProxyUrl(code) {
   const safe = encodeURIComponent(code || "");
+  
+  // Point directly to the backend in production to avoid React Router looping on Vercel
+  const apiBase = import.meta.env.VITE_API_BASE_URL;
+  if (apiBase) {
+    const rootBase = apiBase.replace(/\/api\/?$/, "").replace(/\/$/, "");
+    return `${rootBase}/r/${safe}`;
+  }
+
+  // Fallback for local development (relies on Vite proxy)
   return `${window.location.origin}/r/${safe}`;
 }
 

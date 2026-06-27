@@ -4,7 +4,7 @@ import config from '@pklinks/config';
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure:   !config.isDev,
-  sameSite: 'strict',
+  sameSite: config.isDev ? 'lax' : 'none',
   maxAge:   7 * 24 * 60 * 60 * 1000,
 };
 
