@@ -62,7 +62,7 @@ export function HomePage() {
         </h1>
         
         <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-secondary">
-          A powerful, open-source microservices URL shortener. Built with high-speed Redis caching, real-time analytics, and seamless reliability for all your links.
+          A powerful, intuitive URL shortener designed for growth. Create memorable links, track real-time engagement, and understand your audience effortlessly.
         </p>
 
         <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -86,7 +86,7 @@ export function HomePage() {
             </div>
             <h3 className="font-display text-xl font-bold text-ink">Blazing Fast</h3>
             <p className="mt-2 text-secondary">
-              Powered by Redis caching and highly optimized microservices to ensure your redirects are instant.
+              Our highly optimized platform ensures your links load instantly for every user, no matter where they are.
             </p>
           </div>
           
@@ -96,7 +96,7 @@ export function HomePage() {
             </div>
             <h3 className="font-display text-xl font-bold text-ink">Deep Analytics</h3>
             <p className="mt-2 text-secondary">
-              Track clicks, geolocation, referrers, and devices in real-time through RabbitMQ async processing.
+              Track clicks, geographic locations, top referrers, and device types in real-time with beautiful dashboards.
             </p>
           </div>
 
@@ -115,7 +115,7 @@ export function HomePage() {
       {/* Footer */}
       <footer className="border-t border-borderSubtle bg-surface py-8 text-center">
         <p className="text-sm text-secondary">
-          © {new Date().getFullYear()} PKLinks Platform. Built with modern microservices architecture.
+          © {new Date().getFullYear()} PKLinks Platform. Empowering your digital presence.
         </p>
       </footer>
     </div>
