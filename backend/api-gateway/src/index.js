@@ -22,8 +22,8 @@ app.use(
 );
 
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max:      100,
+  windowMs: (config.rateLimitWindow || 120) * 1000,
+  max:      config.rateLimitMax || 100,
   standardHeaders: true,
   legacyHeaders:   false,
   message: { message: 'Too many requests — please slow down' },
