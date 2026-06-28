@@ -12,7 +12,7 @@ export function jwtGuard(req, res, next) {
   const token = authHeader.slice(7);
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
+    const payload = jwt.verify(token, config.jwtSecret, { clockTolerance: 300 });
     req.userId = payload.sub;
     next();
   } catch (err) {
