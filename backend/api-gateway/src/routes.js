@@ -16,6 +16,7 @@ export function jwtGuard(req, res, next) {
     req.userId = payload.sub;
     next();
   } catch (err) {
+    console.error('[jwtGuard] Token verification failed:', err.name, '-', err.message);
     return res.status(401).json({ message: 'Token is invalid or expired' });
   }
 }
