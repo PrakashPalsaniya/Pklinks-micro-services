@@ -1,12 +1,19 @@
-export function requireAuth(req, res, next) {
-  // In our microservices architecture, the API Gateway already verifies the JWT 
-  // and attaches the user's ID to this custom header.
-  const userId = req.headers['x-user-id'];
+import { verifyToken } from '../auth/auth.service.js';
 
-  if (!userId) {
-    return res.status(401).json({ message: 'Unauthorized (Missing user ID from Gateway)' });
+export function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Authorization header missing or invalid' });
   }
 
-  req.userId = userId;
-  next();
+  const token = authHeader.slice(7);
+
+  try {
+    const payload = verifyToken(token);
+    req.userId = payload.sub;
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: 'Token is invalid or expired' });
+  }
 }
