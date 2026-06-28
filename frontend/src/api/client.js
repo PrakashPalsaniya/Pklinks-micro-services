@@ -56,7 +56,10 @@ const client = axios.create({
 client.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+    // Delete any existing casing to prevent duplicate headers during retries
+    delete config.headers['Authorization'];
+    delete config.headers['authorization'];
+    config.headers['Authorization'] = `Bearer ${token}`;
   }
   return config;
 });

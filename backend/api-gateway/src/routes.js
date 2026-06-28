@@ -36,7 +36,9 @@ function proxy(targetUrl, filterPaths, options = {}) {
     });
   };
 
-  return createProxyMiddleware({
+  let middlewareInstance;
+
+  const proxyOptions = {
     target:       targetUrl,
     changeOrigin: true,
     pathFilter:   filterFn,
@@ -50,14 +52,39 @@ function proxy(targetUrl, filterPaths, options = {}) {
       }
     },
     on: {
-      error: (err, req, res) => {
+      error: async (err, req, res) => {
+        const code = err.code;
+        const isConnectionError = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND'].includes(code);
+
+        req.retries = req.retries || 0;
+
+        // Render free tier takes ~30 seconds to wake up.
+        // We retry 6 times, waiting 5 seconds between each (30s total).
+        if (isConnectionError && req.retries < 6) {
+          req.retries += 1;
+          console.warn(`[gateway] Service at ${targetUrl} is offline (${code}). Retrying in 5s... (Attempt ${req.retries}/6)`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+
+          return middlewareInstance(req, res, (nextErr) => {
+            if (nextErr && !res.headersSent) {
+              res.status(502).json({ message: 'Service starting up — please reload in a moment.' });
+            }
+          });
+        }
+
         console.error(`[gateway] Proxy error to ${targetUrl}: ${err.message}`);
         if (!res.headersSent) {
-          res.status(502).json({ message: 'Service unavailable — please try again later' });
+          res.status(502).json({ 
+            message: 'Service is waking up. Please refresh the page in a few seconds.',
+            wakingUp: true
+          });
         }
       },
     },
-  });
+  };
+
+  middlewareInstance = createProxyMiddleware(proxyOptions);
+  return middlewareInstance;
 }
 
 export function registerRoutes(app) {
