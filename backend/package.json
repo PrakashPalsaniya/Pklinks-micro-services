@@ -12,24 +12,24 @@
     "notification-service"
   ],
   "scripts": {
-    "dev:auth":          "npm run dev --workspace auth-service",
-    "dev:link":          "npm run dev --workspace link-service",
-    "dev:redirect":      "npm run dev --workspace redirect-service",
-    "dev:worker":        "npm run dev --workspace analytics-worker",
-    "dev:analytics":     "npm run dev --workspace analytics-api",
-    "dev:gateway":       "npm run dev --workspace api-gateway",
-    "dev:notification":  "npm run dev --workspace notification-service",
-
-    "start:auth":        "npm run start --workspace auth-service",
-    "start:link":        "npm run start --workspace link-service",
-    "start:redirect":    "npm run start --workspace redirect-service",
-    "start:worker":      "npm run start --workspace analytics-worker",
-    "start:analytics":   "npm run start --workspace analytics-api",
-    "start:gateway":     "npm run start --workspace api-gateway",
-    "start:notification":"npm run start --workspace notification-service"
+    "dev:auth": "npm run dev --workspace auth-service",
+    "dev:link": "npm run dev --workspace link-service",
+    "dev:redirect": "npm run dev --workspace redirect-service",
+    "dev:worker": "npm run dev --workspace analytics-worker",
+    "dev:analytics": "npm run dev --workspace analytics-api",
+    "dev:gateway": "npm run dev --workspace api-gateway",
+    "dev:notification": "npm run dev --workspace notification-service",
+    "dev:all": "concurrently \"npm run dev:auth\" \"npm run dev:link\" \"npm run dev:redirect\" \"npm run dev:worker\" \"npm run dev:analytics\" \"npm run dev:gateway\" \"npm run dev:notification\"",
+    "start:auth": "npm run start --workspace auth-service",
+    "start:link": "npm run start --workspace link-service",
+    "start:redirect": "npm run start --workspace redirect-service",
+    "start:worker": "npm run start --workspace analytics-worker",
+    "start:analytics": "npm run start --workspace analytics-api",
+    "start:gateway": "npm run start --workspace api-gateway",
+    "start:notification": "npm run start --workspace notification-service"
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "nodemon": "^3.1.0"
   }
 }
-

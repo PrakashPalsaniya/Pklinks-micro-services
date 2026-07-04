@@ -1,7 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import * as controller from './auth/auth.controller.js';
-import { requireAuth } from './middleware/auth.middleware.js';
+import { requireAuth } from '@pklinks/utils/auth';
 import { errorHandler } from './middleware/error.middleware.js';
 import { forgotPasswordLimiter } from './middleware/rate-limit.middleware.js';
 

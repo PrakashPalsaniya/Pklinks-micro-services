@@ -1,5 +1,5 @@
-import { createProxyMiddleware } from 'http-proxy-middleware';
-import jwt from 'jsonwebtoken';
+import { createProxyMiddleware, fixRequestBody } from 'http-proxy-middleware';
+import { verifyAccessToken } from '@pklinks/utils/auth';
 import config from '@pklinks/config';
 
 export function jwtGuard(req, res, next) {
@@ -12,7 +12,7 @@ export function jwtGuard(req, res, next) {
   const token = authHeader.slice(7);
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret, { clockTolerance: 300 });
+    const payload = verifyAccessToken(token);
     req.userId = payload.sub;
     next();
   } catch (err) {
@@ -43,16 +43,20 @@ function proxy(targetUrl, filterPaths, options = {}) {
     target:       targetUrl,
     changeOrigin: true,
     pathFilter:   filterFn,
-    onProxyReq: (proxyReq, req) => {
-      if (req.userId) {
-        proxyReq.setHeader('x-user-id', req.userId);
-      }
-
-      if (typeof options.onProxyReq === 'function') {
-        options.onProxyReq(proxyReq, req);
-      }
-    },
     on: {
+      proxyReq: (proxyReq, req) => {
+        // Pass verified user ID to microservices
+        if (req.userId) {
+          proxyReq.setHeader('x-user-id', req.userId);
+        }
+
+        // Re-serialize req.body so POST/PATCH payloads survive proxy retries
+        fixRequestBody(proxyReq, req);
+
+        if (typeof options.onProxyReq === 'function') {
+          options.onProxyReq(proxyReq, req);
+        }
+      },
       error: async (err, req, res) => {
         const code = err.code;
         const isConnectionError = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND'].includes(code);
@@ -100,6 +104,7 @@ export function registerRoutes(app) {
     '/api/links'
   ];
 
+  // Global Auth Check
   app.use((req, res, next) => {
     if (protectedPrefixes.some(prefix => req.path.startsWith(prefix))) {
       return jwtGuard(req, res, next);
@@ -107,6 +112,7 @@ export function registerRoutes(app) {
     next();
   });
 
+  // Routing setup
   app.use(proxy(auth, [
     '/api/auth/signup',
     '/api/auth/login',
@@ -117,7 +123,7 @@ export function registerRoutes(app) {
     '/api/auth/me'
   ]));
 
-
+  // Order matters: analytics must be registered before general link routes
   app.use(proxy(analytics, '/api/links/*/analytics'));
 
   app.use(proxy(link, [
@@ -125,9 +131,11 @@ export function registerRoutes(app) {
     '/api/links/**'
   ]));
 
+  // Route to redirect-service (Note: /api/arch-stats is publicly accessible)
   app.use(proxy(redirect, [
     '/api/redirect',
     '/api/redirect/**',
+    '/api/arch-stats',
     '/r',
     '/r/**'
   ]));

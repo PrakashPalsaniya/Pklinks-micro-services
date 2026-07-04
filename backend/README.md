@@ -14,7 +14,7 @@ Client -> API Gateway (:3000)
 analytics-worker (no port) - RabbitMQ consumer, writes clicks to MongoDB
 
 Infrastructure:
-  MongoDB  :27017 - primary database
+  MongoDB  :27017 - replica set (1 primary + 2 secondaries)
   Redis    :6379  - redirect cache + rate limiting
   RabbitMQ :5672  - event bus (management UI :15672)
 ```
@@ -49,7 +49,8 @@ docker-compose down
 Set these as needed:
 
 - `JWT_SECRET`
-- `MONGO_URI`
+- `MONGO_URI` (Docker sets a replica-set URI automatically)
+- `MONGO_READ_PREFERENCE` (optional — `secondaryPreferred` for read-heavy services)
 - `REDIS_URL`
 - `RABBITMQ_URL`
 - `ALLOWED_ORIGIN`
@@ -65,7 +66,7 @@ Docker Compose now provides MongoDB, Redis, and RabbitMQ locally by default.
 
 ```
 link-service     ---- link.created / link.updated / link.deleted ---> redirect-service
-redirect-service ---- click.event ----------------------------------> analytics-worker
+redirect-service ---- click.event ----------------------------------> analytics-worker (DLQ: analytics.clicks.dlq)
 auth-service     ---- user.registered / email.send -----------------> notification-service
 ```
 

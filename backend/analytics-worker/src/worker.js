@@ -19,7 +19,11 @@ async function startWorker() {
       'analytics.clicks',
       'click.event',
       processClickEvent,
-      CONCURRENCY
+      {
+        prefetch:   CONCURRENCY,
+        deadLetter: true,
+        maxRetries: 3,
+      }
     );
 
     logger.info(`analytics-worker started, processing up to ${CONCURRENCY} messages at a time`);

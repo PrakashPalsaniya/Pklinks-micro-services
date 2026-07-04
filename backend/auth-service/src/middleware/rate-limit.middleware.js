@@ -17,8 +17,8 @@ export const forgotPasswordLimiter = rateLimit({
   message: {
     message: 'Too many password reset requests. Please try again in 15 minutes.',
   },
-  keyGenerator: (req) => {
+  keyGenerator: (req, res) => {
     // Limit by email if provided, otherwise fallback to IP
-    return req.body.email ? req.body.email.toLowerCase() : ipKeyGenerator(req.ip);
+    return req.body.email ? req.body.email.toLowerCase() : ipKeyGenerator(req, res);
   },
 });

@@ -4,13 +4,13 @@ import jwt from 'jsonwebtoken';
 import config from '@pklinks/config';
 import User from '../models/user.model.js';
 import { publish } from '@pklinks/utils/rabbitmq';
+import { verifyAccessToken } from '@pklinks/utils/auth';
 
-// Helpers for token generation
 const signAccess  = (id) => jwt.sign({ sub: id }, config.jwtSecret, { expiresIn: config.jwtAccessExpiresIn });
 const signRefresh = (id) => jwt.sign({ sub: id }, config.jwtSecret, { expiresIn: config.jwtRefreshExpiresIn });
 
 export function verifyToken(token) {
-  return jwt.verify(token, config.jwtSecret);
+  return verifyAccessToken(token);
 }
 
 export async function issueTokens(user) {
@@ -70,7 +70,7 @@ export async function login({ email, password }) {
 
 export async function refreshAccessToken(token) {
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
+    const payload = verifyAccessToken(token);
     const user = await User.findById(payload.sub);
     
     if (!user || user.refreshToken !== token) {

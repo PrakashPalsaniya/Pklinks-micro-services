@@ -1,4 +1,5 @@
 import {
+  Cpu,
   LayoutDashboard,
   Link2,
   LogOut,
@@ -16,7 +17,8 @@ import { Skeleton } from "./ui/Skeleton";
 
 const navItems = [
   { to: "/dashboard", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/dashboard/links", label: "My Links", icon: Link2 }
+  { to: "/dashboard/links", label: "My Links", icon: Link2 },
+  { to: "/dashboard/architecture", label: "Architecture", icon: Cpu }
 ];
 
 function SidebarLink({ item, onClick }) {

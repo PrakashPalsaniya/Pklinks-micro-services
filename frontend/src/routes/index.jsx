@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import("../pages/dashboard/DashboardPage").then
 const LinksPage = lazy(() => import("../pages/links/LinksPage").then((module) => ({ default: module.LinksPage })));
 const LinkDetailPage = lazy(() => import("../pages/links/LinkDetailPage").then((module) => ({ default: module.LinkDetailPage })));
 const LinkAnalyticsPage = lazy(() => import("../pages/analytics/LinkAnalyticsPage").then((module) => ({ default: module.LinkAnalyticsPage })));
+const ArchitecturePage = lazy(() => import("../pages/architecture/ArchitecturePage").then((module) => ({ default: module.ArchitecturePage })));
 const RedirectPage = lazy(() => import("../pages/RedirectPage").then((module) => ({ default: module.RedirectPage })));
 const NotFoundPage = lazy(() => import("../pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 
@@ -84,6 +85,7 @@ export function AppRoutes() {
           <Route path="links" element={<LinksPage />} />
           <Route path="links/:code" element={<LinkDetailPage />} />
           <Route path="links/:code/analytics" element={<LinkAnalyticsPage />} />
+          <Route path="architecture" element={withSuspense(<ArchitecturePage />)} />
         </Route>
 
         <Route path="*" element={withSuspense(<NotFoundPage />)} />

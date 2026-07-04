@@ -8,8 +8,7 @@ export async function processClickEvent(data) {
   const { code, originalUrl, ip, userAgent, referer, timestamp } = data;
 
   if (!code || !originalUrl) {
-    console.log('Skipping invalid click event');
-    return;
+    throw new Error('Invalid click event: missing code or originalUrl');
   }
 
   // 1. Parse User Agent for Browser, OS, and Device

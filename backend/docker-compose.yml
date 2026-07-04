@@ -1,31 +1,69 @@
 version: '3.9'
 
 volumes:
-  mongo-data:
+  mongo-primary-data:
+  mongo-secondary-1-data:
+  mongo-secondary-2-data:
   redis-data:
 
 networks:
   pklinks-net:
     driver: bridge
 
+x-mongo-common: &mongo-common
+  image: mongo:7
+  restart: unless-stopped
+  networks:
+    - pklinks-net
+  command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+  healthcheck:
+    test: ['CMD', 'bash', '-c', 'cat < /dev/null > /dev/tcp/127.0.0.1/27017']
+    interval: 10s
+    timeout: 10s
+    retries: 5
+    start_period: 15s
+
+x-mongo-uri: &mongo-uri
+  MONGO_URI: mongodb://mongo-primary:27017,mongo-secondary-1:27017,mongo-secondary-2:27017/pklinks?replicaSet=rs0
+
 services:
-  mongo:
-    image: mongo:7
-    container_name: pklinks-mongo
-    restart: unless-stopped
+  mongo-primary:
+    <<: *mongo-common
+    container_name: pklinks-mongo-primary
     volumes:
-      - mongo-data:/data/db
-      - ./infra/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - mongo-primary-data:/data/db
     ports:
-      - "${MONGO_PORT:-27017}:27017"
+      - '${MONGO_PORT:-27017}:27017'
+
+  mongo-secondary-1:
+    <<: *mongo-common
+    container_name: pklinks-mongo-secondary-1
+    volumes:
+      - mongo-secondary-1-data:/data/db
+
+  mongo-secondary-2:
+    <<: *mongo-common
+    container_name: pklinks-mongo-secondary-2
+    volumes:
+      - mongo-secondary-2-data:/data/db
+
+  mongo-setup:
+    image: mongo:7
+    container_name: pklinks-mongo-setup
     networks:
       - pklinks-net
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+    volumes:
+      - ./infra/mongo-rs-init.sh:/mongo-rs-init.sh:ro
+      - ./infra/mongo-init.js:/mongo-init.js:ro
+    entrypoint: ['bash', '/mongo-rs-init.sh']
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary-1:
+        condition: service_healthy
+      mongo-secondary-2:
+        condition: service_healthy
+    restart: 'no'
 
   redis:
     image: redis:7-alpine
@@ -34,11 +72,11 @@ services:
     volumes:
       - redis-data:/data
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - '${REDIS_PORT:-6379}:6379'
     networks:
       - pklinks-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,12 +89,12 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pklinks}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?RABBITMQ_PASS is required - set it in backend/.env}
     ports:
-      - "${RABBITMQ_PORT:-5672}:5672"
-      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+      - '${RABBITMQ_PORT:-5672}:5672'
+      - '${RABBITMQ_MANAGEMENT_PORT:-15672}:15672'
     networks:
       - pklinks-net
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 15s
       timeout: 15s
       retries: 5
@@ -73,22 +111,24 @@ services:
       - ./auth-service/.env
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      MONGO_URI: mongodb://mongo:27017/pklinks
+      <<: *mongo-uri
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
     ports:
-      - "${AUTH_PORT:-3001}:3001"
+      - '${AUTH_PORT:-3001}:3001'
     networks:
       - pklinks-net
     depends_on:
-      mongo:
+      mongo-setup:
+        condition: service_completed_successfully
+      mongo-primary:
         condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3001/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -105,19 +145,21 @@ services:
       - ./link-service/.env
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      MONGO_URI: mongodb://mongo:27017/pklinks
+      <<: *mongo-uri
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
     ports:
-      - "${LINK_PORT:-3002}:3002"
+      - '${LINK_PORT:-3002}:3002'
     networks:
       - pklinks-net
     depends_on:
-      mongo:
+      mongo-setup:
+        condition: service_completed_successfully
+      mongo-primary:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3002/api/health"]
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3002/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -134,22 +176,25 @@ services:
       - ./redirect-service/.env
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      MONGO_URI: mongodb://mongo:27017/pklinks
+      <<: *mongo-uri
+      MONGO_READ_PREFERENCE: secondaryPreferred
       REDIS_URL: redis://redis:6379
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
     ports:
-      - "${REDIRECT_PORT:-3003}:3003"
+      - '${REDIRECT_PORT:-3003}:3003'
     networks:
       - pklinks-net
     depends_on:
-      mongo:
+      mongo-setup:
+        condition: service_completed_successfully
+      mongo-primary:
         condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3003/api/health"]
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3003/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -166,12 +211,14 @@ services:
       - ./analytics-worker/.env
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      MONGO_URI: mongodb://mongo:27017/pklinks
+      <<: *mongo-uri
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-pklinks}:${RABBITMQ_PASS}@rabbitmq:5672
     networks:
       - pklinks-net
     depends_on:
-      mongo:
+      mongo-setup:
+        condition: service_completed_successfully
+      mongo-primary:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -205,16 +252,19 @@ services:
       - ./analytics-api/.env
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      MONGO_URI: mongodb://mongo:27017/pklinks
+      <<: *mongo-uri
+      MONGO_READ_PREFERENCE: secondaryPreferred
     ports:
-      - "${ANALYTICS_API_PORT:-3005}:3005"
+      - '${ANALYTICS_API_PORT:-3005}:3005'
     networks:
       - pklinks-net
     depends_on:
-      mongo:
+      mongo-setup:
+        condition: service_completed_successfully
+      mongo-primary:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3005/api/health"]
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3005/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -236,7 +286,7 @@ services:
       REDIRECT_SERVICE_URL: http://redirect-service:3003
       ANALYTICS_API_URL: http://analytics-api:3005
     ports:
-      - "${GATEWAY_PORT:-3000}:3000"
+      - '${GATEWAY_PORT:-3000}:3000'
     networks:
       - pklinks-net
     depends_on:
@@ -249,8 +299,22 @@ services:
       analytics-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3000/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: pklinks-frontend
+    restart: unless-stopped
+    ports:
+      - '5175:5175'
+    networks:
+      - pklinks-net
+    depends_on:
+      api-gateway:
+        condition: service_healthy

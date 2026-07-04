@@ -7,9 +7,11 @@
     "./logger": "./logger.js",
     "./mongoose": "./mongoose.js",
     "./rabbitmq": "./rabbitmq.js",
-    "./redis": "./redis.js"
+    "./redis": "./redis.js",
+    "./auth": "./auth.js"
   },
   "dependencies": {
+    "jsonwebtoken": "^9.0.2",
     "ioredis": "^5.3.2",
     "amqplib": "^0.10.3",
     "mongoose": "^8.3.0",

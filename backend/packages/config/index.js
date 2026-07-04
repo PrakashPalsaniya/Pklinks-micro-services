@@ -39,6 +39,8 @@ const config = {
 
   port: parseInt(process.env.PORT || '3000', 10),
   mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/urlshortener',
+  /** e.g. secondaryPreferred — used by read-heavy services (redirect, analytics-api) */
+  mongoReadPreference: process.env.MONGO_READ_PREFERENCE || null,
   redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
   rabbitmqUrl: process.env.RABBITMQ_URL || 'amqp://guest:guest@127.0.0.1:5672',
 

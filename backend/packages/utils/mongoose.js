@@ -1,10 +1,22 @@
 import mongoose from 'mongoose';
 import config from '@pklinks/config';
 
-export async function connectMongo() {
-  await mongoose.connect(config.mongoUri, {
-    serverSelectionTimeoutMS: 5000,
-  });
+/**
+ * @param {{ readPreference?: string }} [options]
+ */
+export async function connectMongo(options = {}) {
+  const readPreference = options.readPreference ?? config.mongoReadPreference ?? undefined;
+
+  const connectOptions = {
+    serverSelectionTimeoutMS: 10000,
+  };
+
+  if (readPreference) {
+    connectOptions.readPreference = readPreference;
+    console.log(`[mongo] readPreference=${readPreference}`);
+  }
+
+  await mongoose.connect(config.mongoUri, connectOptions);
 
   console.log('[mongo] Connected to MongoDB');
 
