@@ -20,7 +20,7 @@ export async function createLink(formData) {
   const body = {
     ...formData,
     originalUrl: formData.longUrl,
-    expiresAt: formData.expiry
+    expiresAt: formData.expiry ? new Date(formData.expiry).toISOString() : null
   };
 
   const data = await client.post("/links", body);
@@ -32,7 +32,7 @@ export async function updateLink({ code, payload }) {
   const body = {
     ...payload,
     originalUrl: payload.longUrl,
-    expiresAt: payload.expiry
+    expiresAt: payload.expiry ? new Date(payload.expiry).toISOString() : null
   };
 
   const data = await client.patch(`/links/${code}`, body);

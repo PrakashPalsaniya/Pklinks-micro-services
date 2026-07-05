@@ -11,10 +11,10 @@ export const validate = (schema, source = 'body') => {
       req[source] = schema.parse(req[source]);
       next();
     } catch (error) {
-      if (error instanceof ZodError) {
+      if (error.name === 'ZodError' || error instanceof ZodError) {
         return res.status(400).json({
           message: 'Validation failed',
-          errors: error.errors.map((e) => ({
+          errors: (error.errors || error.issues || []).map((e) => ({
             field: e.path.join('.'),
             message: e.message,
           })),
