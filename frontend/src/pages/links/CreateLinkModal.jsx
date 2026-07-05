@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/Button";
 import { Dialog } from "../../components/ui/Dialog";
@@ -6,77 +9,59 @@ import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
 import { useClipboard } from "../../hooks/useClipboard";
 import { useCreateLinkMutation } from "../../hooks/useLinks";
-import { isValidHttpUrlInput } from "../../utils/urlValidation";
 
-const emptyForm = {
-  longUrl: "",
-  title: "",
-  customAlias: "",
-  expiry: ""
-};
+const aliasPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
 
-const aliasPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]{2,39}$/;
+const createLinkSchema = z.object({
+  longUrl: z.string().url("Please enter a valid URL including http:// or https://"),
+  title: z.string().optional(),
+  customAlias: z.string()
+    .min(3, "3-40 characters.")
+    .max(40, "3-40 characters.")
+    .regex(aliasPattern, "Use only letters, numbers, hyphens, or underscores.")
+    .optional()
+    .or(z.literal('')),
+  expiry: z.string().optional().refine((val) => {
+    if (!val) return true;
+    const parsed = new Date(val);
+    return !Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now();
+  }, "Expiry must be a valid future date."),
+});
 
 export function CreateLinkModal({ open, onClose }) {
-  const [form, setForm] = useState(emptyForm);
-  const [errors, setErrors] = useState({});
   const { copy } = useClipboard();
   const createLinkMutation = useCreateLinkMutation();
 
+  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm({
+    resolver: zodResolver(createLinkSchema),
+    defaultValues: { longUrl: "", title: "", customAlias: "", expiry: "" }
+  });
+
+  const customAliasValue = watch("customAlias");
+
   useEffect(() => {
     if (!open) {
-      setForm(emptyForm);
-      setErrors({});
+      reset({ longUrl: "", title: "", customAlias: "", expiry: "" });
     }
-  }, [open]);
+  }, [open, reset]);
 
   const aliasHint = useMemo(() => {
-    if (!form.customAlias.trim()) {
+    if (!customAliasValue || !customAliasValue.trim()) {
       return "Leave blank to generate a short code automatically.";
     }
 
-    return aliasPattern.test(form.customAlias.trim())
+    return aliasPattern.test(customAliasValue.trim()) && customAliasValue.trim().length >= 3
       ? "Looks good."
       : "3-40 characters. Use letters, numbers, hyphens, or underscores.";
-  }, [form.customAlias]);
+  }, [customAliasValue]);
 
-  const validate = () => {
-    const nextErrors = {};
-
-    if (!form.longUrl.trim()) {
-      nextErrors.longUrl = "Long URL is required.";
-    } else if (!isValidHttpUrlInput(form.longUrl)) {
-      nextErrors.longUrl = "Please enter a valid URL including http:// or https://";
-    }
-
-    if (form.customAlias.trim() && !aliasPattern.test(form.customAlias.trim())) {
-      nextErrors.customAlias = "Use only letters, numbers, hyphens, or underscores.";
-    }
-
-    if (form.expiry) {
-      const parsed = new Date(form.expiry);
-      if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) {
-        nextErrors.expiry = "Expiry must be a valid future date.";
-      }
-    }
-
-    setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
-  };
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-
-    if (!validate()) {
-      return;
-    }
-
+  const onSubmit = async (data) => {
     try {
       const payload = {
-        longUrl: form.longUrl.trim(),
-        title: form.title.trim() || undefined,
-        customAlias: form.customAlias.trim() || undefined,
-        expiry: form.expiry || undefined
+        longUrl: data.longUrl.trim(),
+        title: data.title?.trim() || undefined,
+        customAlias: data.customAlias?.trim() || undefined,
+        expiry: data.expiry || undefined
       };
 
       const created = await createLinkMutation.mutateAsync(payload);
@@ -109,33 +94,29 @@ export function CreateLinkModal({ open, onClose }) {
         </div>
       )}
     >
-      <form id="create-link-form" className="grid gap-4" onSubmit={handleSubmit}>
-        <Field label="Long URL" error={errors.longUrl}>
+      <form id="create-link-form" className="grid gap-4" onSubmit={handleSubmit(onSubmit)}>
+        <Field label="Long URL" error={errors.longUrl?.message}>
           <Input
             placeholder="https://example.com/product-launch"
-            value={form.longUrl}
-            onChange={(event) => setForm((current) => ({ ...current, longUrl: event.target.value }))}
+            {...register("longUrl")}
           />
         </Field>
-        <Field label="Title">
+        <Field label="Title" error={errors.title?.message}>
           <Input
             placeholder="Spring campaign landing page"
-            value={form.title}
-            onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+            {...register("title")}
           />
         </Field>
-        <Field label="Custom alias" error={errors.customAlias} description={aliasHint}>
+        <Field label="Custom alias" error={errors.customAlias?.message} description={aliasHint}>
           <Input
             placeholder="spring-launch"
-            value={form.customAlias}
-            onChange={(event) => setForm((current) => ({ ...current, customAlias: event.target.value }))}
+            {...register("customAlias")}
           />
         </Field>
-        <Field label="Expiry" error={errors.expiry} description="Optional. After this time, the link stops redirecting.">
+        <Field label="Expiry" error={errors.expiry?.message} description="Optional. After this time, the link stops redirecting.">
           <Input
             type="datetime-local"
-            value={form.expiry}
-            onChange={(event) => setForm((current) => ({ ...current, expiry: event.target.value }))}
+            {...register("expiry")}
           />
         </Field>
         <div className="rounded-2xl border border-white/5 bg-white/5 p-4 text-xs font-medium leading-relaxed text-secondary italic">

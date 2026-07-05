@@ -1,6 +1,9 @@
 import { ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
@@ -8,29 +11,34 @@ import { Input } from "../../components/ui/Input";
 import { useAuth } from "../../hooks/useAuth";
 import { getDisplayErrorMessage } from "../../utils/errors";
 
+const signupSchema = z.object({
+  fullName: z.string().optional(),
+  email: z.string().email("Please enter a valid email address."),
+  password: z.string().min(8, "Password must be at least 8 characters."),
+  confirmPassword: z.string().min(1, "Please confirm your password."),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
 export function SignupPage() {
   const { signup } = useAuth();
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
-  const [form, setForm] = useState({
-    fullName: "",
-    email: "",
-    password: "",
-    confirmPassword: ""
+  
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(signupSchema),
+    defaultValues: { fullName: "", email: "", password: "", confirmPassword: "" }
   });
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-
-    if (form.password !== form.confirmPassword) {
-      toast.error("Passwords do not match.");
-      return;
-    }
-
+  const onSubmit = async (data) => {
     setPending(true);
-
     try {
-      await signup(form);
+      await signup({ 
+        email: data.email, 
+        password: data.password, 
+        displayName: data.fullName 
+      });
       toast.success("Account created.");
       navigate("/dashboard", { replace: true });
     } catch (error) {
@@ -48,41 +56,36 @@ export function SignupPage() {
         Open a new workspace with your email address.
       </p>
 
-      <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <Field label="Full name">
+      <form className="mt-8 space-y-4" onSubmit={handleSubmit(onSubmit)}>
+        <Field label="Full name" error={errors.fullName?.message}>
           <Input
             placeholder="Pawan Kumar"
-            value={form.fullName}
-            onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))}
+            {...register("fullName")}
+            disabled={pending}
           />
         </Field>
-        <Field label="Email address">
+        <Field label="Email address" error={errors.email?.message}>
           <Input
             type="email"
             placeholder="you@example.com"
-            value={form.email}
-            onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-            required
+            {...register("email")}
+            disabled={pending}
           />
         </Field>
-        <Field label="Password" description="Use at least 8 characters.">
+        <Field label="Password" description="Use at least 8 characters." error={errors.password?.message}>
           <Input
             type="password"
             placeholder="Create a password"
-            value={form.password}
-            onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-            minLength={8}
-            required
+            {...register("password")}
+            disabled={pending}
           />
         </Field>
-        <Field label="Confirm password">
+        <Field label="Confirm password" error={errors.confirmPassword?.message}>
           <Input
             type="password"
             placeholder="Repeat your password"
-            value={form.confirmPassword}
-            onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))}
-            minLength={8}
-            required
+            {...register("confirmPassword")}
+            disabled={pending}
           />
         </Field>
         <Button type="submit" className="w-full justify-center font-display uppercase tracking-[0.08em]" icon={ArrowRight} loading={pending}>

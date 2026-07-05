@@ -1,6 +1,9 @@
 import { CheckCircle2, ArrowRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
@@ -8,22 +11,28 @@ import { Input } from "../../components/ui/Input";
 import { getDisplayErrorMessage } from "../../utils/errors";
 import axios from "axios";
 
+const resetPasswordSchema = z.object({
+  password: z.string().min(8, "Password must be at least 8 characters."),
+  confirmPassword: z.string().min(1, "Please confirm your password."),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
 export function ResetPasswordPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token");
   
   const [pending, setPending] = useState(false);
-  const [form, setForm] = useState({ password: "", confirmPassword: "" });
   const [success, setSuccess] = useState(false);
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    
-    if (form.password !== form.confirmPassword) {
-      return toast.error("Passwords do not match");
-    }
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(resetPasswordSchema),
+    defaultValues: { password: "", confirmPassword: "" }
+  });
 
+  const onSubmit = async (data) => {
     if (!token) {
       return toast.error("Reset token is missing from URL");
     }
@@ -33,7 +42,7 @@ export function ResetPasswordPage() {
     try {
       await axios.post("/api/auth/reset-password", { 
         token, 
-        password: form.password 
+        password: data.password 
       });
       setSuccess(true);
       toast.success("Password reset successful!");
@@ -78,25 +87,22 @@ export function ResetPasswordPage() {
           <Link to="/forgot-password" className="block mt-2 font-medium underline">Go to Forgot Password</Link>
         </div>
       ) : (
-        <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-          <Field label="New Password">
+        <form className="mt-8 space-y-4" onSubmit={handleSubmit(onSubmit)}>
+          <Field label="New Password" error={errors.password?.message}>
             <Input
               type="password"
               placeholder="Min. 8 characters"
-              value={form.password}
-              onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
-              required
-              minLength={8}
+              {...register("password")}
+              disabled={pending}
               autoFocus
             />
           </Field>
-          <Field label="Confirm New Password">
+          <Field label="Confirm New Password" error={errors.confirmPassword?.message}>
             <Input
               type="password"
               placeholder="Repeat password"
-              value={form.confirmPassword}
-              onChange={(e) => setForm(f => ({ ...f, confirmPassword: e.target.value }))}
-              required
+              {...register("confirmPassword")}
+              disabled={pending}
             />
           </Field>
           <Button type="submit" className="w-full justify-center font-display uppercase tracking-[0.08em]" icon={ArrowRight} loading={pending}>

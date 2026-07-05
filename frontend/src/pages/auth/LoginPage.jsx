@@ -1,6 +1,9 @@
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
@@ -8,13 +11,22 @@ import { Input } from "../../components/ui/Input";
 import { useAuth } from "../../hooks/useAuth";
 import { getDisplayErrorMessage } from "../../utils/errors";
 
+const loginSchema = z.object({
+  email: z.string().email("Please enter a valid email address."),
+  password: z.string().min(1, "Password is required."),
+});
+
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [pending, setPending] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "" });
+
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(loginSchema),
+    defaultValues: { email: "", password: "" }
+  });
 
   const from = location.state?.from?.pathname || "/dashboard";
 
@@ -30,12 +42,10 @@ export function LoginPage() {
     setSearchParams(searchParams, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const onSubmit = async (data) => {
     setPending(true);
-
     try {
-      await login(form);
+      await login(data);
       toast.success("Welcome back.");
       navigate(from, { replace: true });
     } catch (error) {
@@ -53,23 +63,21 @@ export function LoginPage() {
         Sign in to your account with your email and password.
       </p>
 
-      <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <Field label="Email address">
+      <form className="mt-8 space-y-4" onSubmit={handleSubmit(onSubmit)}>
+        <Field label="Email address" error={errors.email?.message}>
           <Input
             type="email"
             placeholder="you@example.com"
-            value={form.email}
-            onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-            required
+            {...register("email")}
+            disabled={pending}
           />
         </Field>
-        <Field label="Password">
+        <Field label="Password" error={errors.password?.message}>
           <Input
             type="password"
             placeholder="Your password"
-            value={form.password}
-            onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
-            required
+            {...register("password")}
+            disabled={pending}
           />
         </Field>
         <Button type="submit" className="w-full justify-center font-display uppercase tracking-[0.08em]" icon={ArrowRight} loading={pending}>
