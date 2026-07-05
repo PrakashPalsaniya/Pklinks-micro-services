@@ -142,7 +142,7 @@ function LinkCard({
                 <p className="text-[8px] uppercase tracking-wider text-muted">Clicks</p>
                 <p className="text-xs font-bold text-ink">{formatCount(link.clickCount || 0)}</p>
               </div>
-              <CopyButton value={link.shortUrl} variant="icon" iconOnly className="h-7 w-7" />
+              <CopyButton value={link.shortUrl} variant="ghost" iconOnly className="h-7 w-7" />
             </div>
           </div>
         </div>

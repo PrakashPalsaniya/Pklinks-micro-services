@@ -196,20 +196,20 @@ export function LinkDetailPage() {
                   <Badge className={statusMeta.className}>{statusMeta.label}</Badge>
                   <span className="text-[11px] uppercase tracking-[0.14em] text-secondary">{hostname || "Destination"}</span>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-3">
+                <div className="mt-3 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
                   <a
                     href={link.shortUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-base font-semibold text-accent visited:text-accent hover:text-accentHover"
+                    className="text-base font-semibold text-accent hover:text-accentHover break-all"
                   >
-                    {truncateMiddle(link.shortUrl, 34, 10)}
+                    {link.shortUrl}
                   </a>
                   <Button
                     type="button"
                     size="sm"
                     icon={primaryActionLabel === "copy" ? Copy : primaryActionLabel === "expiry" ? PencilLine : Power}
-                    className="font-display uppercase tracking-[0.08em]"
+                    className="font-display uppercase tracking-[0.08em] shrink-0"
                     loading={primaryActionLabel === "reactivate" && updateLinkMutation.isPending}
                     onClick={handlePrimaryAction}
                   >
@@ -221,6 +221,16 @@ export function LinkDetailPage() {
             </div>
 
             <div className="grid gap-2 sm:grid-cols-2 xl:w-[360px] xl:grid-cols-2">
+              <Button
+                type="button"
+                variant="subtle"
+                size="sm"
+                icon={BarChart3}
+                className="justify-center sm:hidden"
+                onClick={() => navigate(`/dashboard/links/${link.code}/analytics`)}
+              >
+                Analytics
+              </Button>
               <Button type="button" variant="subtle" size="sm" icon={PencilLine} className="justify-center" onClick={() => setEditOpen(true)}>
                 Edit
               </Button>

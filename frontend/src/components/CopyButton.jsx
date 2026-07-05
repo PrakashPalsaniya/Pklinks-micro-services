@@ -1,4 +1,4 @@
-﻿import { Check, Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useClipboard } from "../hooks/useClipboard";
 import { Button } from "./ui/Button";
@@ -34,7 +34,7 @@ export function CopyButton({
   const accessibleLabel = copied ? copiedLabel : typeof label === "string" ? label : "Copy";
 
   return (
-    <Button type="button" variant={variant} size="sm" icon={copied ? Check : Copy} className={className} onClick={handleCopy}>
+    <Button type="button" variant={variant} size={iconOnly ? "icon" : "sm"} icon={copied ? Check : Copy} className={className} onClick={handleCopy}>
       {iconOnly ? <span className="sr-only">{accessibleLabel}</span> : copied ? copiedLabel : label}
     </Button>
   );

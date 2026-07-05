@@ -141,3 +141,8 @@ body {
 
 @keyframes fade-in-log { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 .animate-fade-in-log { animation: fade-in-log 300ms ease-out; }
+
+/* Reset visited link color so browsers don't force dark purple on dark theme */
+a:visited {
+  color: inherit;
+}
