@@ -12,13 +12,6 @@ export async function signup(req, res, next) {
   try {
     const { email, password, displayName } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters' });
-    }
-
     const { user, accessToken, refreshToken } = await authService.signup({ email, password, displayName });
 
     res.cookie('refreshToken', refreshToken, COOKIE_OPTIONS);
@@ -31,10 +24,6 @@ export async function signup(req, res, next) {
 export async function login(req, res, next) {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
 
     const { user, accessToken, refreshToken } = await authService.login({ email, password });
 
@@ -86,9 +75,6 @@ export async function getMe(req, res, next) {
 export async function forgotPassword(req, res, next) {
   try {
     const { email } = req.body;
-    if (!email) {
-      return res.status(400).json({ message: 'Email is required' });
-    }
 
     await authService.requestPasswordReset(email);
 
@@ -102,13 +88,6 @@ export async function forgotPassword(req, res, next) {
 export async function resetPassword(req, res, next) {
   try {
     const { token, password } = req.body;
-
-    if (!token || !password) {
-      return res.status(400).json({ message: 'Token and new password are required' });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters' });
-    }
 
     await authService.resetPassword(token, password);
 

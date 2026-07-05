@@ -2,15 +2,7 @@ import { nanoid } from 'nanoid';
 import Url from '../models/url.model.js';
 import { publish } from '@pklinks/utils/rabbitmq';
 
-function validateUrl(rawUrl) {
-  try {
-    new URL(rawUrl);
-  } catch {
-    const err = new Error('Invalid URL — must include scheme (http:// or https://)');
-    err.statusCode = 400;
-    throw err;
-  }
-}
+// URL validation is handled by Zod schema
 
 async function generateUniqueCode() {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -36,18 +28,9 @@ export async function getLinkByCode(code, userId) {
 }
 
 export async function createLink({ originalUrl, title, expiresAt, userId, customAlias }) {
-  validateUrl(originalUrl);
-
   let code;
   if (customAlias) {
     const trimmedAlias = customAlias.trim();
-    const aliasPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]{2,39}$/;
-    
-    if (!aliasPattern.test(trimmedAlias)) {
-      const err = new Error('Invalid custom alias — 3-40 chars, alphanumeric/hyphens/underscores only.');
-      err.statusCode = 400;
-      throw err;
-    }
 
     const exists = await Url.findOne({ code: trimmedAlias });
     if (exists) {
@@ -87,10 +70,6 @@ export async function updateLink(code, userId, updates) {
     if (updates[field] !== undefined) {
       safeUpdates[field] = updates[field];
     }
-  }
-
-  if (safeUpdates.originalUrl) {
-    validateUrl(safeUpdates.originalUrl);
   }
 
   const link = await Url.findOneAndUpdate(

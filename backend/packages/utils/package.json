@@ -8,14 +8,16 @@
     "./mongoose": "./mongoose.js",
     "./rabbitmq": "./rabbitmq.js",
     "./redis": "./redis.js",
-    "./auth": "./auth.js"
+    "./auth": "./auth.js",
+    "./validate": "./validate.js"
   },
   "dependencies": {
-    "jsonwebtoken": "^9.0.2",
-    "ioredis": "^5.3.2",
     "amqplib": "^0.10.3",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.3.0",
     "pino": "^9.1.0",
-    "pino-pretty": "^11.0.0"
+    "pino-pretty": "^11.0.0",
+    "zod": "^4.4.3"
   }
 }

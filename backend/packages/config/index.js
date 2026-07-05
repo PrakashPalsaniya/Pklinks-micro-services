@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import { z } from 'zod';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,38 +34,69 @@ const loadEnvFiles = () => {
 
 loadEnvFiles();
 
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  PORT: z.string().regex(/^\d+$/).transform(Number).default('3000'),
+  MONGO_URI: z.string().default('mongodb://127.0.0.1:27017/urlshortener'),
+  MONGO_READ_PREFERENCE: z.string().nullable().optional(),
+  REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
+  RABBITMQ_URL: z.string().default('amqp://guest:guest@127.0.0.1:5672'),
+
+  JWT_SECRET: z.string().default('dev-secret-please-change'),
+  JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
+  JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+
+  BASE_URL: z.string().default('http://localhost:5175'),
+  REDIRECT_CACHE_TTL: z.string().regex(/^\d+$/).transform(Number).default('3600'),
+  RATE_LIMIT_MAX: z.string().regex(/^\d+$/).transform(Number).default('100'),
+  RATE_LIMIT_WINDOW: z.string().regex(/^\d+$/).transform(Number).default('120'),
+
+  AUTH_SERVICE_URL: z.string().default('http://127.0.0.1:3001'),
+  LINK_SERVICE_URL: z.string().default('http://127.0.0.1:3002'),
+  REDIRECT_SERVICE_URL: z.string().default('http://127.0.0.1:3003'),
+  ANALYTICS_API_URL: z.string().default('http://127.0.0.1:3005'),
+
+  ALLOWED_ORIGIN: z.string().default('http://localhost:5175'),
+
+  SMTP_HOST: z.string().default('smtp.ethereal.email'),
+  SMTP_PORT: z.string().regex(/^\d+$/).transform(Number).default('587'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+});
+
+let parsedEnv;
+try {
+  parsedEnv = envSchema.parse(process.env);
+} catch (err) {
+  console.error("❌ Invalid environment variables:", JSON.stringify(err.flatten().fieldErrors, null, 2));
+  process.exit(1);
+}
+
 const config = {
-  nodeEnv: process.env.NODE_ENV || 'development',
-  isDev: (process.env.NODE_ENV || 'development') === 'development',
-
-  port: parseInt(process.env.PORT || '3000', 10),
-  mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/urlshortener',
-  /** e.g. secondaryPreferred — used by read-heavy services (redirect, analytics-api) */
-  mongoReadPreference: process.env.MONGO_READ_PREFERENCE || null,
-  redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
-  rabbitmqUrl: process.env.RABBITMQ_URL || 'amqp://guest:guest@127.0.0.1:5672',
-
-  jwtSecret: process.env.JWT_SECRET || 'dev-secret-please-change',
-  jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
-  jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
-
-  baseUrl: process.env.BASE_URL || 'http://localhost:5175',
-  redirectCacheTtl: parseInt(process.env.REDIRECT_CACHE_TTL || '3600', 10),
-  rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
-  rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW || '120', 10),
-
-  authServiceUrl: process.env.AUTH_SERVICE_URL || 'http://127.0.0.1:3001',
-  linkServiceUrl: process.env.LINK_SERVICE_URL || 'http://127.0.0.1:3002',
-  redirectServiceUrl: process.env.REDIRECT_SERVICE_URL || 'http://127.0.0.1:3003',
-  analyticsApiUrl: process.env.ANALYTICS_API_URL || 'http://127.0.0.1:3005',
-
-  allowedOrigin: process.env.ALLOWED_ORIGIN || 'http://localhost:5175',
-
+  nodeEnv: parsedEnv.NODE_ENV,
+  isDev: parsedEnv.NODE_ENV === 'development',
+  port: parsedEnv.PORT,
+  mongoUri: parsedEnv.MONGO_URI,
+  mongoReadPreference: parsedEnv.MONGO_READ_PREFERENCE,
+  redisUrl: parsedEnv.REDIS_URL,
+  rabbitmqUrl: parsedEnv.RABBITMQ_URL,
+  jwtSecret: parsedEnv.JWT_SECRET,
+  jwtAccessExpiresIn: parsedEnv.JWT_ACCESS_EXPIRES_IN,
+  jwtRefreshExpiresIn: parsedEnv.JWT_REFRESH_EXPIRES_IN,
+  baseUrl: parsedEnv.BASE_URL,
+  redirectCacheTtl: parsedEnv.REDIRECT_CACHE_TTL,
+  rateLimitMax: parsedEnv.RATE_LIMIT_MAX,
+  rateLimitWindow: parsedEnv.RATE_LIMIT_WINDOW,
+  authServiceUrl: parsedEnv.AUTH_SERVICE_URL,
+  linkServiceUrl: parsedEnv.LINK_SERVICE_URL,
+  redirectServiceUrl: parsedEnv.REDIRECT_SERVICE_URL,
+  analyticsApiUrl: parsedEnv.ANALYTICS_API_URL,
+  allowedOrigin: parsedEnv.ALLOWED_ORIGIN,
   smtp: {
-    host: process.env.SMTP_HOST || 'smtp.ethereal.email',
-    port: parseInt(process.env.SMTP_PORT || '587', 10),
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
+    host: parsedEnv.SMTP_HOST,
+    port: parsedEnv.SMTP_PORT,
+    user: parsedEnv.SMTP_USER,
+    pass: parsedEnv.SMTP_PASS,
   },
 };
 
