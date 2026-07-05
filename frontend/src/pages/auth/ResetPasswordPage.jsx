@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
 import { getDisplayErrorMessage } from "../../utils/errors";
-import axios from "axios";
+import client from "../../api/client";
 
 const resetPasswordSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters."),
@@ -40,7 +40,7 @@ export function ResetPasswordPage() {
     setPending(true);
 
     try {
-      await axios.post("/api/auth/reset-password", { 
+      await client.post("/auth/reset-password", { 
         token, 
         password: data.password 
       });

@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
 import { Input } from "../../components/ui/Input";
 import { getDisplayErrorMessage } from "../../utils/errors";
-import axios from "axios";
+import client from "../../api/client";
 
 const forgotPasswordSchema = z.object({
   email: z.string().email("Please enter a valid email address."),
@@ -28,7 +28,7 @@ export function ForgotPasswordPage() {
   const onSubmit = async (data) => {
     setPending(true);
     try {
-      await axios.post("/api/auth/forgot-password", { email: data.email });
+      await client.post("/auth/forgot-password", { email: data.email });
       setSubmittedEmail(data.email);
       setSubmitted(true);
       toast.success("Reset link sent successfully.");
