@@ -26,10 +26,13 @@
     "start:worker": "npm run start --workspace analytics-worker",
     "start:analytics": "npm run start --workspace analytics-api",
     "start:gateway": "npm run start --workspace api-gateway",
-    "start:notification": "npm run start --workspace notification-service"
+    "start:notification": "npm run start --workspace notification-service",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest"
   },
   "devDependencies": {
     "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "jest": "^30.4.2",
     "nodemon": "^3.1.0"
   }
 }
