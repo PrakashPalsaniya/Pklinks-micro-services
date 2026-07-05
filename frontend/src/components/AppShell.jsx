@@ -239,7 +239,7 @@ export function AppShell() {
 
       {/* Bottom Nav */}
       <nav className="fixed inset-x-4 bottom-4 z-40 glass rounded-2xl border border-white/[0.05] p-1.5 shadow-2xl lg:hidden">
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-3 gap-1">
           {navItems.map((item) => <BottomNavLink key={item.to} item={item} />)}
         </div>
       </nav>

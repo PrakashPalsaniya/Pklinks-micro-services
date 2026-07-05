@@ -100,48 +100,50 @@ function LinkCard({
   return (
     <Card className="transition hover:border-borderDefault hover:bg-elevated">
       <CardContent className="p-3 sm:p-4">
-        <div className="flex flex-col gap-1.5 sm:hidden">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="flex flex-col gap-2.5 sm:hidden">
+          {/* Header Row */}
+          <div className="flex items-center gap-2">
             <SelectionToggle
               selected={selected}
               onChange={() => onToggleSelect(link.code)}
               label={`Select ${link.title || link.code}`}
             />
             <DestinationFavicon url={link.longUrl} label={link.title || link.code} />
-            <StatusBadge link={link} />
             <Link
               to={`/dashboard/links/${link.code}`}
-              className="shrink-0 font-mono text-sm font-semibold text-ink transition hover:text-ink/80"
+              className="font-mono text-sm font-semibold text-ink truncate"
             >
               /{link.code}
             </Link>
+            <StatusBadge link={link} />
             <span className="flex-1" />
-            <div className="shrink-0 rounded-md border border-borderSubtle bg-elevated px-2 py-1 text-right">
-              <p className="text-[9px] uppercase tracking-[0.12em] text-muted">Clicks</p>
-              <p className="text-sm font-semibold text-ink">{formatCount(link.clickCount || 0)}</p>
-            </div>
-            <CopyButton value={link.shortUrl} variant="icon" iconOnly className="h-8 w-8 shrink-0 px-0" />
             <OverflowMenu actions={overflowActions} />
           </div>
 
-          <div className="flex min-w-0 items-center gap-1.5 overflow-hidden pl-[calc(1rem+0.5rem+2rem+0.5rem)]">
-            <a
-              href={link.shortUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 truncate font-mono text-xs text-ink transition hover:text-ink/80"
-              style={{ maxWidth: "38%" }}
-            >
-              {truncateMiddle(link.shortUrl, 18, 6)}
-            </a>
-            {hostname && (
-              <span className="shrink-0 truncate text-xs text-secondary" style={{ maxWidth: "30%" }}>
-                · {hostname}
-              </span>
-            )}
-            <span className="ml-auto shrink-0 text-xs text-secondary">
-              {formatRelativeDate(link.createdAt)}
-            </span>
+          {/* Details & Copy Row */}
+          <div className="flex items-center justify-between gap-3 bg-white/[0.02] border border-white/5 rounded-xl p-2.5">
+            <div className="min-w-0 flex-1">
+              <a
+                href={link.shortUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block truncate font-mono text-xs text-ink transition hover:text-ink/80"
+              >
+                {link.shortUrl}
+              </a>
+              {hostname && (
+                <span className="block mt-1 text-[10px] text-muted truncate">
+                  {hostname} · {formatRelativeDate(link.createdAt)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2.5 shrink-0 pl-2.5 border-l border-white/5">
+              <div className="text-right mr-1">
+                <p className="text-[8px] uppercase tracking-wider text-muted">Clicks</p>
+                <p className="text-xs font-bold text-ink">{formatCount(link.clickCount || 0)}</p>
+              </div>
+              <CopyButton value={link.shortUrl} variant="icon" iconOnly className="h-7 w-7" />
+            </div>
           </div>
         </div>
 

@@ -100,7 +100,7 @@ export function HomePage() {
             <input
               id="url-input"
               type="url"
-              className="flex-1 bg-transparent border-0 outline-none px-5 py-4 text-ink font-mono text-sm placeholder-zinc-600"
+              className="flex-1 bg-transparent border-0 outline-none px-5 py-4 text-ink font-mono text-sm placeholder-zinc-500"
               placeholder="https://your-really-long-url.com/goes/here"
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
@@ -114,7 +114,7 @@ export function HomePage() {
             </button>
           </div>
           
-          <p className="text-xs text-zinc-600 font-mono">
+          <p className="text-xs text-zinc-400 font-mono">
             Free to use · No sign-up required · <strong className="text-accentHover font-medium">pklinks.in/xxxxxxx</strong>
           </p>
 
@@ -259,29 +259,28 @@ export function HomePage() {
         </section>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-white/10 py-10 px-6 sm:px-8 w-full max-w-[1100px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="font-mono text-sm text-zinc-500">
+        <div className="font-mono text-sm text-zinc-400">
           PK<span className="text-accent">Links</span> · Built with ☕ by sskks
         </div>
         <ul className="flex gap-6 list-none">
           <li>
-            <a href="#" className="text-zinc-500 hover:text-zinc-400 text-xs transition-colors">
+            <a href="#" className="text-zinc-400 hover:text-zinc-300 text-xs transition-colors">
               Privacy
             </a>
           </li>
           <li>
-            <a href="#" className="text-zinc-500 hover:text-zinc-400 text-xs transition-colors">
+            <a href="#" className="text-zinc-400 hover:text-zinc-300 text-xs transition-colors">
               Terms
             </a>
           </li>
           <li>
-            <a href="#" className="text-zinc-500 hover:text-zinc-400 text-xs transition-colors">
+            <a href="#" className="text-zinc-400 hover:text-zinc-300 text-xs transition-colors">
               Status
             </a>
           </li>
           <li>
-            <a href="https://github.com" target="_blank" rel="noreferrer" className="text-zinc-500 hover:text-zinc-400 text-xs transition-colors">
+            <a href="https://github.com" target="_blank" rel="noreferrer" className="text-zinc-400 hover:text-zinc-300 text-xs transition-colors">
               GitHub
             </a>
           </li>
