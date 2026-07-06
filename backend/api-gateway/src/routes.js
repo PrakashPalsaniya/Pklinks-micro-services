@@ -131,11 +131,10 @@ export function registerRoutes(app) {
     '/api/links/**'
   ]));
 
-  // Route to redirect-service (Note: /api/arch-stats is publicly accessible)
+  // Route to redirect-service
   app.use(proxy(redirect, [
     '/api/redirect',
     '/api/redirect/**',
-    '/api/arch-stats',
     '/r',
     '/r/**'
   ]));
