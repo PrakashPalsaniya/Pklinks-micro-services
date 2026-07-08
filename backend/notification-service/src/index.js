@@ -5,7 +5,7 @@ import { handleEmailMessage } from './email.handler.js';
 let healthServer;
 
 function startHealthCheckServer() {
-  const port = process.env.PORT || 8080;
+  const port = process.env.PORT || 3007;
   const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -28,10 +28,10 @@ async function bootstrap() {
     healthServer = startHealthCheckServer();
     await connect();
     
-    // Subscribe to email.send events
-    await subscribe('email_queue', 'email.send', async (payload) => {
+    // Dead-letter after a few retries so a failing SMTP server doesn't requeue forever
+    await subscribe('pklinks_email_queue', 'email.send', async (payload) => {
       await handleEmailMessage(payload);
-    });
+    }, { deadLetter: true, maxRetries: 3 });
 
     console.log('[notification-service] Listening for email events...');
   } catch (err) {

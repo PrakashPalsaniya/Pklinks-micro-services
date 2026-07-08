@@ -1,13 +1,15 @@
 import express from 'express';
 import * as controller from './links/link.controller.js';
 import { requireAuth } from '@pklinks/utils/auth';
+import { applySecurity } from '@pklinks/utils/security';
 import { errorHandler } from './middleware/error.middleware.js';
 import { validate } from '@pklinks/utils/validate';
 import { createLinkSchema, updateLinkSchema } from './links/link.schemas.js';
 
 const app = express();
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
+applySecurity(app);
 app.use(express.json());
 
 app.get('/api/health', (req, res) => {

@@ -4,38 +4,45 @@ import jwt from 'jsonwebtoken';
 import config from '@pklinks/config';
 import User from '../models/user.model.js';
 import { publish } from '@pklinks/utils/rabbitmq';
-import { verifyAccessToken } from '@pklinks/utils/auth';
+import { verifyRefreshToken } from '@pklinks/utils/auth';
 
-const signAccess  = (id) => jwt.sign({ sub: id }, config.jwtSecret, { expiresIn: config.jwtAccessExpiresIn });
-const signRefresh = (id) => jwt.sign({ sub: id }, config.jwtSecret, { expiresIn: config.jwtRefreshExpiresIn });
+const signAccess  = (id) => jwt.sign({ sub: id, type: 'access' }, config.jwtSecret, { expiresIn: config.jwtAccessExpiresIn });
+const signRefresh = (id) => jwt.sign({ sub: id, type: 'refresh' }, config.jwtRefreshSecret, { expiresIn: config.jwtRefreshExpiresIn });
 
-export function verifyToken(token) {
-  return verifyAccessToken(token);
-}
+const MAX_SESSIONS = 5;
 
-export async function issueTokens(user) {
+export async function issueTokens(user, oldRefreshToken = null) {
   const id = user._id.toString();
   const accessToken  = signAccess(id);
   const refreshToken = signRefresh(id);
-  
-  await User.findByIdAndUpdate(user._id, { refreshToken });
+
+  const kept = (user.refreshTokens || []).filter((t) => t !== oldRefreshToken);
+  kept.push(refreshToken);
+  const trimmed = kept.slice(-MAX_SESSIONS);
+
+  await User.findByIdAndUpdate(user._id, { refreshTokens: trimmed });
   return { accessToken, refreshToken };
 }
 
 export async function signup({ email, password, name, displayName }) {
-  const existing = await User.findOne({ email: email.toLowerCase() });
-  if (existing) {
-    const err = new Error('Email already in use');
-    err.statusCode = 409;
-    throw err;
-  }
-
   const hash = await bcrypt.hash(password, 12);
-  const user = await User.create({
-    email:       email.toLowerCase(),
-    passwordHash: hash,
-    displayName: displayName || name || email.split('@')[0],
-  });
+
+  let user;
+  try {
+    user = await User.create({
+      email:        email.toLowerCase(),
+      passwordHash: hash,
+      displayName:  displayName || name || email.split('@')[0],
+    });
+  } catch (e) {
+    // Duplicate email
+    if (e.code === 11000) {
+      const err = new Error('Email already in use');
+      err.statusCode = 409;
+      throw err;
+    }
+    throw e;
+  }
 
   publish('user.registered', {
     userId: user._id.toString(),
@@ -70,14 +77,14 @@ export async function login({ email, password }) {
 
 export async function refreshAccessToken(token) {
   try {
-    const payload = verifyAccessToken(token);
+    const payload = verifyRefreshToken(token);
     const user = await User.findById(payload.sub);
-    
-    if (!user || user.refreshToken !== token) {
+
+    if (!user || !(user.refreshTokens || []).includes(token)) {
       throw new Error();
     }
-    
-    return issueTokens(user);
+
+    return issueTokens(user, token);
   } catch (e) {
     const err = new Error('Invalid or expired refresh token');
     err.statusCode = 401;
@@ -85,8 +92,12 @@ export async function refreshAccessToken(token) {
   }
 }
 
-export async function logout(userId) {
-  await User.findByIdAndUpdate(userId, { refreshToken: null });
+export async function logout(userId, refreshToken = null) {
+  if (refreshToken) {
+    await User.findByIdAndUpdate(userId, { $pull: { refreshTokens: refreshToken } });
+  } else {
+    await User.findByIdAndUpdate(userId, { refreshTokens: [] });
+  }
 }
 
 export async function getMe(userId) {
@@ -101,12 +112,10 @@ export async function getMe(userId) {
 
 export async function requestPasswordReset(email) {
   const user = await User.findOne({ email: email.toLowerCase() });
-  
-  // Don't leak user existence for security reasons
+
+  // Don't leak whether the user exists
   if (!user) return false;
 
-
-  // Generate raw token and hashed version
   const resetToken = crypto.randomBytes(32).toString('hex');
   const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
@@ -114,9 +123,8 @@ export async function requestPasswordReset(email) {
   user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
   await user.save();
 
-  // Queue an email to the user with their reset link
   const resetLink = `${config.baseUrl}/reset-password?token=${resetToken}`;
-  
+
   publish('email.send', {
     to: user.email,
     template: 'forgot_password',
@@ -129,7 +137,6 @@ export async function requestPasswordReset(email) {
 
   return true;
 }
-
 
 export async function resetPassword(token, newPassword) {
   const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -145,17 +152,15 @@ export async function resetPassword(token, newPassword) {
     throw err;
   }
 
-  // Save the new password and clean up the reset tokens
   user.passwordHash = await bcrypt.hash(newPassword, 12);
   user.resetPasswordToken = undefined;
   user.resetPasswordExpires = undefined;
-  
-  // Invalidate refresh token for security
-  user.refreshToken = null;
-  
+
+  // Invalidate all sessions
+  user.refreshTokens = [];
+
   await user.save();
 
-  // Notify user of change
   publish('email.send', {
     to: user.email,
     template: 'password_reset_confirmation',

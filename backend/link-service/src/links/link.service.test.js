@@ -1,6 +1,6 @@
 import { jest } from '@jest/globals';
 
-// 1. Mock dependencies
+// mock deps
 jest.unstable_mockModule('../models/url.model.js', () => ({
   default: {
     findOne: jest.fn(),
@@ -16,7 +16,7 @@ jest.unstable_mockModule('nanoid', () => ({
   nanoid: jest.fn(() => 'mock123'),
 }));
 
-// 2. Dynamically import the modules under test after mocking
+// import after mocks are set up
 const { createLink } = await import('./link.service.js');
 const Url = (await import('../models/url.model.js')).default;
 const { publish } = await import('@pklinks/utils/rabbitmq');
@@ -28,7 +28,6 @@ describe('Link Service (Isolated)', () => {
 
   describe('createLink', () => {
     it('should generate a nanoid short code if no custom alias is provided', async () => {
-      // Mock that the generated code is unique
       Url.findOne.mockResolvedValueOnce(null);
       Url.create.mockImplementationOnce((data) => Promise.resolve({ ...data, _id: '123' }));
 
@@ -48,7 +47,6 @@ describe('Link Service (Isolated)', () => {
     });
 
     it('should use custom alias if provided and available', async () => {
-      // Mock that the custom alias is available
       Url.findOne.mockResolvedValueOnce(null);
       Url.create.mockImplementationOnce((data) => Promise.resolve({ ...data, _id: '456' }));
 
@@ -66,7 +64,6 @@ describe('Link Service (Isolated)', () => {
     });
 
     it('should throw an error if custom alias is already taken', async () => {
-      // Mock that the custom alias already exists in the DB
       Url.findOne.mockResolvedValueOnce({ _id: '789', code: 'taken-alias' });
 
       await expect(createLink({

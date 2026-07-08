@@ -22,3 +22,18 @@ export const forgotPasswordLimiter = rateLimit({
     return req.body.email ? req.body.email.toLowerCase() : ipKeyGenerator(req, res);
   },
 });
+
+export const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: new RedisStore({
+    // @ts-expect-error - ioredis types sometimes clash with rate-limit-redis
+    sendCommand: (...args) => redisClient.call(...args),
+    prefix: 'rl:reset-password:',
+  }),
+  message: {
+    message: 'Too many password reset attempts. Please try again in 15 minutes.',
+  },
+});

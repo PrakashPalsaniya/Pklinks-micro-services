@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
+// only allow real web links — blocks javascript:, data:, file: etc.
+const httpUrl = z.string()
+  .url('Invalid URL — must include scheme (http:// or https://)')
+  .refine((val) => /^https?:\/\//i.test(val), 'URL must start with http:// or https://');
+
 export const createLinkSchema = z.object({
-  originalUrl: z.string().url('Invalid URL — must include scheme (http:// or https://)'),
+  originalUrl: httpUrl,
   title: z.string().optional(),
   expiresAt: z.string().datetime().optional().nullable(),
   customAlias: z.string()
@@ -12,7 +17,7 @@ export const createLinkSchema = z.object({
 });
 
 export const updateLinkSchema = z.object({
-  originalUrl: z.string().url('Invalid URL — must include scheme (http:// or https://)').optional(),
+  originalUrl: httpUrl.optional(),
   title: z.string().optional(),
   expiresAt: z.string().datetime().optional().nullable(),
   isActive: z.boolean().optional(),

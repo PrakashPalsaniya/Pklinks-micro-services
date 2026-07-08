@@ -2,8 +2,6 @@ import { nanoid } from 'nanoid';
 import Url from '../models/url.model.js';
 import { publish } from '@pklinks/utils/rabbitmq';
 
-// URL validation is handled by Zod schema
-
 async function generateUniqueCode() {
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = nanoid(6);
@@ -43,18 +41,31 @@ export async function createLink({ originalUrl, title, expiresAt, userId, custom
     code = await generateUniqueCode();
   }
 
-  const link = await Url.create({
-    code,
-    originalUrl,
-    title:     title || '',
-    expiresAt: expiresAt ? new Date(expiresAt) : null,
-    userId,
-    isActive: true,
-  });
+  let link;
+  try {
+    link = await Url.create({
+      code,
+      originalUrl,
+      title:     title || '',
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      userId,
+      isActive: true,
+    });
+  } catch (e) {
+    // Concurrent alias/code collision
+    if (e.code === 11000) {
+      const err = new Error('This custom alias is already taken.');
+      err.statusCode = 400;
+      throw err;
+    }
+    throw e;
+  }
 
   publish('link.created', {
     code:        link.code,
     originalUrl: link.originalUrl,
+    expiresAt:   link.expiresAt,
+    isActive:    link.isActive,
     userId:      userId.toString(),
     timestamp:   new Date().toISOString(),
   });
@@ -84,10 +95,14 @@ export async function updateLink(code, userId, updates) {
     throw err;
   }
 
+  // Treat an expired link as inactive so the cache isn't primed with a stale URL
+  const notExpired = !link.expiresAt || new Date(link.expiresAt) > new Date();
+
   publish('link.updated', {
     code:        link.code,
     originalUrl: link.originalUrl,
-    isActive:    link.isActive,
+    expiresAt:   link.expiresAt,
+    isActive:    link.isActive && notExpired,
     timestamp:   new Date().toISOString(),
   });
 

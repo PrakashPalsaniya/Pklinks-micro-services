@@ -54,7 +54,7 @@ export async function refresh(req, res, next) {
 export async function logout(req, res, next) {
   try {
     if (req.userId) {
-      await authService.logout(req.userId);
+      await authService.logout(req.userId, req.cookies.refreshToken || null);
     }
     res.clearCookie('refreshToken', COOKIE_OPTIONS);
     res.json({ message: 'Logged out successfully' });
