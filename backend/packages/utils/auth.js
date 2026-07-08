@@ -4,7 +4,15 @@ import config from '@pklinks/config';
 export const JWT_VERIFY_OPTIONS = { clockTolerance: 300 };
 
 export function verifyAccessToken(token) {
-  return jwt.verify(token, config.jwtSecret, JWT_VERIFY_OPTIONS);
+  const payload = jwt.verify(token, config.jwtSecret, JWT_VERIFY_OPTIONS);
+  if (payload.type && payload.type !== 'access') throw new Error('Invalid token type');
+  return payload;
+}
+
+export function verifyRefreshToken(token) {
+  const payload = jwt.verify(token, config.jwtRefreshSecret, JWT_VERIFY_OPTIONS);
+  if (payload.type !== 'refresh') throw new Error('Invalid token type');
+  return payload;
 }
 
 export function requireAuth(req, res, next) {

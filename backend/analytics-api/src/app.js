@@ -1,10 +1,12 @@
 import express from 'express';
 import { requireAuth } from '@pklinks/utils/auth';
+import { applySecurity } from '@pklinks/utils/security';
 import * as controller from './analytics.controller.js';
 
 const app = express();
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
+applySecurity(app);
 app.use(express.json());
 
 app.get('/api/health', (req, res) => {

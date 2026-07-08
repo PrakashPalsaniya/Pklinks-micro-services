@@ -3,17 +3,19 @@ import { bustCache, setCache } from './cache.js';
 
 export async function startLinkEventConsumer(redisClient) {
   await subscribe(
-    'redirect.cache.bust',
+    'pklinks_redirect_cache_bust',
     'link.*',
     async (payload, routingKey) => {
-      const { code, originalUrl, isActive } = payload;
+      const { code, originalUrl, isActive, expiresAt } = payload;
       if (!code) {
         console.warn('[consumer] Received link event without code, skipping');
         return;
       }
 
+      const notExpired = !expiresAt || new Date(expiresAt) > new Date();
+
       if (routingKey === 'link.created' || routingKey === 'link.updated') {
-        if (isActive !== false && originalUrl) {
+        if (isActive !== false && originalUrl && notExpired) {
           await setCache(redisClient, code, originalUrl);
           console.log(`[consumer] Cache primed for code: ${code} (${routingKey})`);
         } else {
@@ -21,12 +23,11 @@ export async function startLinkEventConsumer(redisClient) {
           console.log(`[consumer] Cache busted for code: ${code} (inactive/deleted)`);
         }
       } else {
-        // Fallback for link.deleted or any other event
         await bustCache(redisClient, code);
         console.log(`[consumer] Cache busted for code: ${code} (${routingKey})`);
       }
     },
-    1
+    { prefetch: 1, deadLetter: true, maxRetries: 3 }
   );
 
   console.log('[consumer] Listening for link.* events to bust Redis cache');

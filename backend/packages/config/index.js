@@ -43,6 +43,7 @@ const envSchema = z.object({
   RABBITMQ_URL: z.string().default('amqp://guest:guest@127.0.0.1:5672'),
 
   JWT_SECRET: z.string().default('dev-secret-please-change'),
+  JWT_REFRESH_SECRET: z.string().default('dev-refresh-secret-please-change'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
@@ -72,6 +73,16 @@ try {
   process.exit(1);
 }
 
+if (parsedEnv.NODE_ENV === 'production') {
+  const usingDefaultSecret =
+    parsedEnv.JWT_SECRET === 'dev-secret-please-change' ||
+    parsedEnv.JWT_REFRESH_SECRET === 'dev-refresh-secret-please-change';
+  if (usingDefaultSecret) {
+    console.error('❌ JWT_SECRET and JWT_REFRESH_SECRET must be set in production.');
+    process.exit(1);
+  }
+}
+
 const config = {
   nodeEnv: parsedEnv.NODE_ENV,
   isDev: parsedEnv.NODE_ENV === 'development',
@@ -81,6 +92,7 @@ const config = {
   redisUrl: parsedEnv.REDIS_URL,
   rabbitmqUrl: parsedEnv.RABBITMQ_URL,
   jwtSecret: parsedEnv.JWT_SECRET,
+  jwtRefreshSecret: parsedEnv.JWT_REFRESH_SECRET,
   jwtAccessExpiresIn: parsedEnv.JWT_ACCESS_EXPIRES_IN,
   jwtRefreshExpiresIn: parsedEnv.JWT_REFRESH_EXPIRES_IN,
   baseUrl: parsedEnv.BASE_URL,

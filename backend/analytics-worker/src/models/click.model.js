@@ -2,6 +2,11 @@ import mongoose from 'mongoose';
 
 const clickSchema = new mongoose.Schema(
   {
+    eventId: {
+      type:   String,
+      unique: true,
+      sparse: true, // dedupe key for redelivered messages
+    },
     code: {
       type:     String,
       required: true,

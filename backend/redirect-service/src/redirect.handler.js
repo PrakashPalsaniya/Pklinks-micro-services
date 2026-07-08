@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import { getCache, setCache, setNegativeCache, NOT_FOUND_SENTINEL } from './cache.js';
+import { getCache, setCache, setCacheWithTtl, setNegativeCache, NOT_FOUND_SENTINEL } from './cache.js';
+
 import { checkRateLimit } from './ratelimit.js';
 import { publishClickEvent } from './producer.js';
 
-// Simple schema for the redirect service (read-only mostly)
 const urlSchema = new mongoose.Schema({
   code:        String,
   originalUrl: String,
@@ -19,7 +19,6 @@ export async function handleRedirect(redis, req, res) {
   const ua = req.headers['user-agent'] || '';
   const ref = req.headers['referer'] || '';
 
-  // 1. Check rate limit first
   try {
     const { allowed } = await checkRateLimit(redis, code, ip);
     if (!allowed) {
@@ -29,7 +28,7 @@ export async function handleRedirect(redis, req, res) {
     console.error('Rate limit error:', e.message);
   }
 
-  // 2. Try to get from cache (Fast Path)
+  // try cache first
   try {
     const cached = await getCache(redis, code);
 
@@ -45,20 +44,24 @@ export async function handleRedirect(redis, req, res) {
     console.error('Cache error:', e.message);
   }
 
-  // 3. Fallback to Database (Slow Path)
+  // fall back to db
   try {
     const link = await Url.findOne({ code }).lean();
     const now = new Date();
     const isValid = link && link.isActive && (!link.expiresAt || link.expiresAt > now);
 
     if (!isValid) {
-      // Mark as not found in cache so we don't hit DB again immediately
       await setNegativeCache(redis, code).catch(() => {});
       return res.status(404).json({ message: 'Link not found' });
     }
 
-    // Success! Update cache and publish event
-    await setCache(redis, code, link.originalUrl).catch(() => {});
+    // cap TTL so cache can't outlive the link
+    if (link.expiresAt) {
+      const ttl = Math.floor((link.expiresAt.getTime() - now.getTime()) / 1000);
+      await setCacheWithTtl(redis, code, link.originalUrl, ttl).catch(() => {});
+    } else {
+      await setCache(redis, code, link.originalUrl).catch(() => {});
+    }
     publishClickEvent({ code, originalUrl: link.originalUrl, ip, userAgent: ua, referer: ref });
 
     return res.redirect(302, link.originalUrl);
@@ -73,14 +76,19 @@ export async function getRedirectInfo(redis, req, res) {
 
   try {
     const cached = await getCache(redis, code);
-    if (cached && cached !== NOT_FOUND_SENTINEL) {
+    if (cached === NOT_FOUND_SENTINEL) {
+      return res.status(404).json({ message: 'Link not found' });
+    }
+    if (cached) {
       return res.json({ originalUrl: cached });
     }
 
     const link = await Url.findOne({ code, isActive: true }).lean();
-    if (!link) return res.status(404).json({ message: 'Link not found' });
+    if (!link) {
+      await setNegativeCache(redis, code).catch(() => {});
+      return res.status(404).json({ message: 'Link not found' });
+    }
 
-    // Check if the link has expired before returning it
     const now = new Date();
     if (link.expiresAt && link.expiresAt <= now) {
       return res.status(410).json({ message: 'Link has expired' });

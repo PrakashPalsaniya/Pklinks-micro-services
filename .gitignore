@@ -113,6 +113,17 @@ temp/
 *.orig
 
 
+# ── Security — Never Commit Private Keys ─────────────────────────────────────
+*.pem
+*.key
+secrets/
+
+
+# ── Dev Tools & AI Agents ─────────────────────────────────────────────────────
+.agents/
+.qodo/
+
+
 # ── Package Manager Locks (keep these!) ───────────────────────────────────────
 # package-lock.json  ← DO NOT ignore, commit this
 # yarn.lock          ← DO NOT ignore, commit this

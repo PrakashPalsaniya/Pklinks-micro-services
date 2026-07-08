@@ -3,13 +3,14 @@ import { connectMongo, disconnectMongo } from '@pklinks/utils/mongoose';
 import { connect as connectRabbitMQ, subscribe } from '@pklinks/utils/rabbitmq';
 import { createLogger } from '@pklinks/utils/logger';
 import { processClickEvent } from './processor.js';
+import { startBatcher, stopBatcher } from './batcher.js';
 
 const logger = createLogger('analytics-worker');
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
 let healthServer;
 
 function startHealthCheckServer() {
-  const port = process.env.PORT || 8080;
+  const port = process.env.PORT || 0;
   const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -33,6 +34,8 @@ async function startWorker() {
 
     await connectRabbitMQ();
     logger.info('RabbitMQ connected');
+
+    startBatcher();
 
     await subscribe(
       'analytics.clicks',
@@ -59,6 +62,7 @@ async function shutdown() {
   if (healthServer) {
     healthServer.close();
   }
+  await stopBatcher();
   await disconnectMongo();
   process.exit(0);
 }

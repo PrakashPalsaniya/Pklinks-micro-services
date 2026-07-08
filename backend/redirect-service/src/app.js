@@ -1,10 +1,12 @@
 import express from 'express';
+import { applySecurity } from '@pklinks/utils/security';
 import { handleRedirect, getRedirectInfo } from './redirect.handler.js';
 
 export function createApp(redisClient) {
   const app = express();
 
-  app.set('trust proxy', true);
+  app.set('trust proxy', 1);
+  applySecurity(app);
   app.use(express.json());
 
   app.get('/api/health', (req, res) => {

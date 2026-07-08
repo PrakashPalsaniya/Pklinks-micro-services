@@ -9,10 +9,13 @@
     "./rabbitmq": "./rabbitmq.js",
     "./redis": "./redis.js",
     "./auth": "./auth.js",
-    "./validate": "./validate.js"
+    "./validate": "./validate.js",
+    "./security": "./security.js"
   },
   "dependencies": {
     "amqplib": "^0.10.3",
+    "cors": "^2.8.5",
+    "helmet": "^8.0.0",
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.3.0",
