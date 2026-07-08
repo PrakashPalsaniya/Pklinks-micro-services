@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { AuthProvider } from "./context/AuthContext";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppRoutes } from "./routes";
 
 const queryClient = new QueryClient({
@@ -17,7 +18,9 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <AppRoutes />
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
         <Toaster
           position="top-right"
           closeButton

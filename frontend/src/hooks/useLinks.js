@@ -68,9 +68,14 @@ export const useDeactivateLinkMutation = () => {
 
   return useMutation({
     mutationFn: deactivateLink,
-    // onSuccess receives the server response ({ message: "..." }) and the variables (code string).
-    // Since the delete endpoint doesn't return the link, we update the cache manually using the code.
-    onSuccess: (_data, code) => {
+    // optimistically flip isActive, snapshotting cache for rollback on failure
+    onMutate: async (code) => {
+      await queryClient.cancelQueries({ queryKey: linkKeys.all });
+      await queryClient.cancelQueries({ queryKey: linkKeys.detail(code) });
+
+      const previousAll = queryClient.getQueryData(linkKeys.all);
+      const previousDetail = queryClient.getQueryData(linkKeys.detail(code));
+
       queryClient.setQueryData(linkKeys.all, (current) => {
         if (!Array.isArray(current)) return current;
         return current.map((item) =>
@@ -80,6 +85,18 @@ export const useDeactivateLinkMutation = () => {
       queryClient.setQueryData(linkKeys.detail(code), (current) =>
         current ? { ...current, isActive: false } : current
       );
+
+      return { previousAll, previousDetail, code };
+    },
+    onError: (_err, code, context) => {
+      if (context?.previousAll !== undefined) {
+        queryClient.setQueryData(linkKeys.all, context.previousAll);
+      }
+      if (context?.previousDetail !== undefined) {
+        queryClient.setQueryData(linkKeys.detail(code), context.previousDetail);
+      }
+    },
+    onSettled: (_data, _err, code) => {
       queryClient.invalidateQueries({ queryKey: linkKeys.analytics(code) });
     }
   });

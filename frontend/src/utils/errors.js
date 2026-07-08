@@ -3,17 +3,15 @@ export function getDisplayErrorMessage(error, fallback = "Something went wrong. 
     return fallback;
   }
 
-  // If it's a string, return it directly
   if (typeof error === "string") {
     return error;
   }
 
-  // 1. Prioritize the custom message sent from our backend API
+  // prefer the backend's message
   if (error.response?.data?.message) {
     return error.response.data.message;
   }
 
-  // 2. Map common HTTP status codes to user-friendly messages
   if (error.response?.status) {
     switch (error.response.status) {
       case 429:
@@ -30,16 +28,15 @@ export function getDisplayErrorMessage(error, fallback = "Something went wrong. 
       case 504:
         return "Our servers are currently experiencing issues. Please try again later.";
       default:
-        break; // Fall through
+        break;
     }
   }
 
-  // 3. Prevent Axios's default "Request failed with status code XXX"
+  // hide axios's default status-code message
   if (error.message && error.message.includes("Request failed with status code")) {
     return fallback;
   }
 
-  // 4. Return any other safe error message (like "Network Error")
   if (typeof error.message === "string" && error.message.trim()) {
     return error.message;
   }

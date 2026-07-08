@@ -13,11 +13,7 @@ import {
   signupWithEmail
 } from "../api/auth";
 import { setUnauthorizedHandler } from "../api/client";
-import {
-  clearAllTokens,
-  setAccessToken,
-  setRefreshToken
-} from "../api/tokenStore";
+import { clearAllTokens, setAccessToken } from "../api/tokenStore";
 import { getDisplayErrorMessage } from "../utils/errors";
 
 export const AuthContext = createContext(null);
@@ -28,20 +24,10 @@ export function AuthProvider({ children }) {
 
   const clearSession = useCallback(() => { setUser(null); }, []);
 
-  /**
-   * Fetch the current user profile from GET /api/auth/me.
-   * The axios interceptor automatically retries with a refreshed token if
-   * the access token is expired — so this function handles both cases:
-   *   - Valid access token  → resolves immediately
-   *   - Expired access token + valid refresh token → interceptor refreshes silently, then resolves
-   *   - No tokens at all   → throws 401
-   */
   const hydrateUser = useCallback(async () => {
     const response = await fetchCurrentUser();
-    // Backend returns: { user: { id, email, displayName, createdAt } }
     const profile = response?.user || response;
-    
-    // Prevent "fake login" if a misconfigured proxy or CDN returns HTML instead of JSON
+
     if (!profile || typeof profile !== 'object' || (!profile.id && !profile._id && !profile.email)) {
       throw new Error("We couldn't connect to the server right now. Please try again later.");
     }
@@ -50,20 +36,11 @@ export function AuthProvider({ children }) {
     return profile;
   }, []);
 
-  /**
-   * Store tokens and set user state after a successful login / signup.
-   * Backend returns: { user, accessToken, refreshToken }
-   */
   const handleSessionSuccess = useCallback((session) => {
-    if (session?.accessToken)  setAccessToken(session.accessToken);
-    if (session?.refreshToken) setRefreshToken(session.refreshToken);
+    if (session?.accessToken) setAccessToken(session.accessToken);
     setUser(session?.user || null);
   }, []);
 
-  // ── Bootstrap ────────────────────────────────────────────────────────────────
-  // On mount: try to restore the session by calling GET /api/auth/me.
-  // The axios interceptor handles the silent refresh transparently, so we
-  // don't need to call refreshSession() explicitly here.
   useEffect(() => {
     let cancelled = false;
 
@@ -73,8 +50,6 @@ export function AuthProvider({ children }) {
       } catch (error) {
         if (cancelled) return;
 
-        // 401 just means the user isn't logged in (no tokens, or refresh failed).
-        // Anything else is a network/server error worth surfacing.
         if (error?.status !== 401) {
           toast.error(getDisplayErrorMessage(error, "We couldn't load your account right now."));
         }
@@ -88,8 +63,6 @@ export function AuthProvider({ children }) {
 
     void bootstrap();
 
-    // Register the global "session expired" handler.
-    // Fired by the interceptor when a refresh also fails mid-session.
     const removeUnauthorizedHandler = setUnauthorizedHandler(() => {
       if (!cancelled) {
         clearAllTokens();
@@ -104,8 +77,6 @@ export function AuthProvider({ children }) {
       removeUnauthorizedHandler();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Auth Actions ──────────────────────────────────────────────────────────────
 
   const login = useCallback(async ({ email, password }) => {
     const session = await loginWithEmail({ email, password });
