@@ -6,7 +6,10 @@ import { processClickEvent } from './processor.js';
 import { startBatcher, stopBatcher } from './batcher.js';
 
 const logger = createLogger('analytics-worker');
-const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
+// Messages are acked only after their batch is persisted, so prefetch must be
+// large enough to fill a batch — otherwise throughput is capped to the flush timer.
+const BATCH_MAX = parseInt(process.env.ANALYTICS_FLUSH_MAX || '500', 10);
+const PREFETCH  = parseInt(process.env.WORKER_PREFETCH || String(BATCH_MAX), 10);
 let healthServer;
 
 function startHealthCheckServer() {
@@ -42,13 +45,13 @@ async function startWorker() {
       'click.event',
       processClickEvent,
       {
-        prefetch:   CONCURRENCY,
+        prefetch:   PREFETCH,
         deadLetter: true,
         maxRetries: 3,
       }
     );
 
-    logger.info(`analytics-worker started, processing up to ${CONCURRENCY} messages at a time`);
+    logger.info(`analytics-worker started, buffering up to ${PREFETCH} in-flight messages`);
   } catch (err) {
     logger.error({ err }, 'Failed to start analytics-worker');
     process.exit(1);

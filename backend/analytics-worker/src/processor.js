@@ -2,6 +2,10 @@ import UAParser from 'ua-parser-js';
 import geoip from 'geoip-lite';
 import { enqueue } from './batcher.js';
 
+// MongoDB field paths can't contain '.' or start with '$', so make any value
+// derived from user-controlled input (UA, referer) safe to use as a key.
+const safeKey = (v) => String(v ?? 'Unknown').replace(/[.$]/g, '_').slice(0, 64) || 'Unknown';
+
 export async function processClickEvent(data) {
   const { eventId, code, originalUrl, ip, userAgent, referer, timestamp } = data;
 
@@ -41,7 +45,7 @@ export async function processClickEvent(data) {
     }
   }
 
-  enqueue({
+  return enqueue({
     code,
     click: {
       eventId,
@@ -60,12 +64,12 @@ export async function processClickEvent(data) {
       code,
       date: day,
       inc: {
-        totalClicks:              1,
-        [`byBrowser.${browser}`]: 1,
-        [`byOs.${os}`]:           1,
-        [`byDevice.${device}`]:   1,
-        [`byReferer.${refKey}`]:  1,
-        [`byCountry.${country}`]: 1,
+        totalClicks:                       1,
+        [`byBrowser.${safeKey(browser)}`]: 1,
+        [`byOs.${safeKey(os)}`]:           1,
+        [`byDevice.${safeKey(device)}`]:   1,
+        [`byReferer.${safeKey(refKey)}`]:  1,
+        [`byCountry.${safeKey(country)}`]: 1,
       },
     },
   });

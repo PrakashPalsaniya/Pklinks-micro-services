@@ -9,6 +9,8 @@ import { verifyRefreshToken } from '@pklinks/utils/auth';
 const signAccess  = (id) => jwt.sign({ sub: id, type: 'access' }, config.jwtSecret, { expiresIn: config.jwtAccessExpiresIn });
 const signRefresh = (id) => jwt.sign({ sub: id, type: 'refresh' }, config.jwtRefreshSecret, { expiresIn: config.jwtRefreshExpiresIn });
 
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
 const MAX_SESSIONS = 5;
 
 export async function issueTokens(user, oldRefreshToken = null) {
@@ -16,8 +18,9 @@ export async function issueTokens(user, oldRefreshToken = null) {
   const accessToken  = signAccess(id);
   const refreshToken = signRefresh(id);
 
-  const kept = (user.refreshTokens || []).filter((t) => t !== oldRefreshToken);
-  kept.push(refreshToken);
+  const oldHash = oldRefreshToken ? hashToken(oldRefreshToken) : null;
+  const kept = (user.refreshTokens || []).filter((t) => t !== oldHash);
+  kept.push(hashToken(refreshToken));
   const trimmed = kept.slice(-MAX_SESSIONS);
 
   await User.findByIdAndUpdate(user._id, { refreshTokens: trimmed });
@@ -80,7 +83,7 @@ export async function refreshAccessToken(token) {
     const payload = verifyRefreshToken(token);
     const user = await User.findById(payload.sub);
 
-    if (!user || !(user.refreshTokens || []).includes(token)) {
+    if (!user || !(user.refreshTokens || []).includes(hashToken(token))) {
       throw new Error();
     }
 
@@ -94,7 +97,7 @@ export async function refreshAccessToken(token) {
 
 export async function logout(userId, refreshToken = null) {
   if (refreshToken) {
-    await User.findByIdAndUpdate(userId, { $pull: { refreshTokens: refreshToken } });
+    await User.findByIdAndUpdate(userId, { $pull: { refreshTokens: hashToken(refreshToken) } });
   } else {
     await User.findByIdAndUpdate(userId, { refreshTokens: [] });
   }
