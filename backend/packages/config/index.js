@@ -51,6 +51,8 @@ const envSchema = z.object({
   REDIRECT_CACHE_TTL: z.string().regex(/^\d+$/).transform(Number).default('3600'),
   RATE_LIMIT_MAX: z.string().regex(/^\d+$/).transform(Number).default('100'),
   RATE_LIMIT_WINDOW: z.string().regex(/^\d+$/).transform(Number).default('120'),
+  REDIRECT_RATE_LIMIT_MAX: z.string().regex(/^\d+$/).transform(Number).default('120'),
+  REDIRECT_RATE_LIMIT_WINDOW: z.string().regex(/^\d+$/).transform(Number).default('60'),
 
   AUTH_SERVICE_URL: z.string().default('http://127.0.0.1:3001'),
   LINK_SERVICE_URL: z.string().default('http://127.0.0.1:3002'),
@@ -99,6 +101,8 @@ const config = {
   redirectCacheTtl: parsedEnv.REDIRECT_CACHE_TTL,
   rateLimitMax: parsedEnv.RATE_LIMIT_MAX,
   rateLimitWindow: parsedEnv.RATE_LIMIT_WINDOW,
+  redirectRateLimitMax: parsedEnv.REDIRECT_RATE_LIMIT_MAX,
+  redirectRateLimitWindow: parsedEnv.REDIRECT_RATE_LIMIT_WINDOW,
   authServiceUrl: parsedEnv.AUTH_SERVICE_URL,
   linkServiceUrl: parsedEnv.LINK_SERVICE_URL,
   redirectServiceUrl: parsedEnv.REDIRECT_SERVICE_URL,

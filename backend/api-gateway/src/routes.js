@@ -50,6 +50,9 @@ function proxy(targetUrl, filterPaths, options = {}) {
           proxyReq.setHeader('x-user-id', req.userId);
         }
 
+        proxyReq.setHeader('x-forwarded-for', req.ip);
+        proxyReq.setHeader('x-forwarded-proto', req.protocol);
+
         // Re-serialize req.body so POST/PATCH payloads survive proxy retries
         fixRequestBody(proxyReq, req);
 

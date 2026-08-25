@@ -1,11 +1,12 @@
 import Redis from 'ioredis';
 import config from '@pklinks/config';
 
-export function createRedisClient() {
+export function createRedisClient(options = {}) {
   const client = new Redis(config.redisUrl, {
     lazyConnect: false,
     maxRetriesPerRequest: null,
     enableReadyCheck: true,
+    ...options,
   });
 
   client.on('connect', () => {

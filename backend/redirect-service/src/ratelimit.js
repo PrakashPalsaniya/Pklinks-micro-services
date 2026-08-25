@@ -1,18 +1,22 @@
 import config from '@pklinks/config';
 
 function rateLimitKey(code, ip) {
-  const safeIp = ip.replace(/:/g, '_');
+  const safeIp = String(ip || 'unknown').replace(/:/g, '_');
   return `rate:${code}:${safeIp}`;
 }
 
 export async function checkRateLimit(redisClient, code, ip) {
   const key = rateLimitKey(code, ip);
+  const window = config.redirectRateLimitWindow;
 
-  const count = await redisClient.incr(key);
+  const results = await redisClient
+    .multi()
+    .incr(key)
+    .expire(key, window, 'NX')
+    .exec();
 
-  if (count === 1) {
-    await redisClient.expire(key, config.rateLimitWindow);
-  }
+  const [incrErr, count] = results[0];
+  if (incrErr) throw incrErr;
 
-  return { allowed: count <= config.rateLimitMax, count };
+  return { allowed: count <= config.redirectRateLimitMax, count };
 }
