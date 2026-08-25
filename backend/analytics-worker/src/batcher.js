@@ -36,11 +36,16 @@ export async function flush() {
   try {
     await Click.insertMany(batch.map((b) => b.click), { ordered: false });
   } catch (e) {
-    if (e.code === 11000 || Array.isArray(e.writeErrors)) {
-      for (const we of e.writeErrors || []) {
+    const writeErrors = Array.isArray(e.writeErrors) ? e.writeErrors : [];
+    const isDup = (we) => (we.code ?? we.err?.code) === 11000;
+
+    if (writeErrors.length && writeErrors.every(isDup)) {
+      for (const we of writeErrors) {
         const idx = we.index ?? we.err?.index;
         if (typeof idx === 'number') duplicates.add(idx);
       }
+    } else if (!writeErrors.length && e.code === 11000) {
+      batch.forEach((_, i) => duplicates.add(i));
     } else {
       // Not persisted — let RabbitMQ redeliver.
       for (const s of settlers) s.reject(e);

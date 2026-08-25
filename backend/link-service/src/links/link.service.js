@@ -8,7 +8,10 @@ async function generateUniqueCode() {
     const exists = await Url.findOne({ code });
     if (!exists) return code;
   }
-  throw new Error('Could not generate a unique code — please try again');
+
+  const err = new Error('Could not generate a unique short code — please try again.');
+  err.statusCode = 503;
+  throw err;
 }
 
 export async function listLinks(userId) {
@@ -26,8 +29,10 @@ export async function getLinkByCode(code, userId) {
 }
 
 export async function createLink({ originalUrl, title, expiresAt, userId, customAlias }) {
+  const isCustom = Boolean(customAlias);
   let code;
-  if (customAlias) {
+
+  if (isCustom) {
     const trimmedAlias = customAlias.trim();
 
     const exists = await Url.findOne({ code: trimmedAlias });
@@ -54,8 +59,10 @@ export async function createLink({ originalUrl, title, expiresAt, userId, custom
   } catch (e) {
     // Concurrent alias/code collision
     if (e.code === 11000) {
-      const err = new Error('This custom alias is already taken.');
-      err.statusCode = 400;
+      const err = isCustom
+        ? new Error('This custom alias is already taken.')
+        : new Error('Could not generate a unique short code — please try again.');
+      err.statusCode = isCustom ? 400 : 503;
       throw err;
     }
     throw e;

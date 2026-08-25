@@ -1,5 +1,5 @@
 import { subscribe } from '@pklinks/utils/rabbitmq';
-import { bustCache, setCache } from './cache.js';
+import { bustCache, setCache, setCacheWithTtl } from './cache.js';
 
 export async function startLinkEventConsumer(redisClient) {
   await subscribe(
@@ -16,7 +16,12 @@ export async function startLinkEventConsumer(redisClient) {
 
       if (routingKey === 'link.created' || routingKey === 'link.updated') {
         if (isActive !== false && originalUrl && notExpired) {
-          await setCache(redisClient, code, originalUrl);
+          if (expiresAt) {
+            const ttl = Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000);
+            await setCacheWithTtl(redisClient, code, originalUrl, ttl);
+          } else {
+            await setCache(redisClient, code, originalUrl);
+          }
           console.log(`[consumer] Cache primed for code: ${code} (${routingKey})`);
         } else {
           await bustCache(redisClient, code);
