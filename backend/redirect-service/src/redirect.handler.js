@@ -1,17 +1,15 @@
-import mongoose from 'mongoose';
+import Url from '@pklinks/utils/models/url';
 import { getCache, setCache, setCacheWithTtl, setNegativeCache, NOT_FOUND_SENTINEL } from './cache.js';
 
 import { checkRateLimit } from './ratelimit.js';
 import { publishClickEvent } from './producer.js';
 
-const urlSchema = new mongoose.Schema({
-  code:        String,
-  originalUrl: String,
-  isActive:    Boolean,
-  expiresAt:   Date,
-});
+async function findLink(code) {
+  const fromReplica = await Url.findOne({ code }).lean();
+  if (fromReplica) return fromReplica;
 
-const Url = mongoose.models.Url || mongoose.model('Url', urlSchema);
+  return Url.findOne({ code }).read('primary').lean();
+}
 
 export async function handleRedirect(redis, req, res) {
   const { code } = req.params;
@@ -46,7 +44,7 @@ export async function handleRedirect(redis, req, res) {
 
   // fall back to db
   try {
-    const link = await Url.findOne({ code }).lean();
+    const link = await findLink(code);
     const now = new Date();
     const isValid = link && link.isActive && (!link.expiresAt || link.expiresAt > now);
 
@@ -73,6 +71,16 @@ export async function handleRedirect(redis, req, res) {
 
 export async function getRedirectInfo(redis, req, res) {
   const { code } = req.params;
+  const ip = req.ip || 'unknown';
+
+  try {
+    const { allowed } = await checkRateLimit(redis, code, ip);
+    if (!allowed) {
+      return res.status(429).json({ message: 'Too many requests. Slow down.' });
+    }
+  } catch (e) {
+    console.error('Rate limit error:', e.message);
+  }
 
   try {
     const cached = await getCache(redis, code);
@@ -83,8 +91,8 @@ export async function getRedirectInfo(redis, req, res) {
       return res.json({ originalUrl: cached });
     }
 
-    const link = await Url.findOne({ code, isActive: true }).lean();
-    if (!link) {
+    const link = await findLink(code);
+    if (!link || !link.isActive) {
       await setNegativeCache(redis, code).catch(() => {});
       return res.status(404).json({ message: 'Link not found' });
     }

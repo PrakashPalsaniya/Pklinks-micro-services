@@ -10,7 +10,8 @@
     "./redis": "./redis.js",
     "./auth": "./auth.js",
     "./validate": "./validate.js",
-    "./security": "./security.js"
+    "./security": "./security.js",
+    "./models/url": "./models/url.js"
   },
   "dependencies": {
     "amqplib": "^0.10.3",

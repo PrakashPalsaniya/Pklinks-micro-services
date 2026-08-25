@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import Url from '@pklinks/utils/models/url';
 
 const analyticsSchema = new mongoose.Schema({
   code:        String,
@@ -25,33 +26,6 @@ const clickSchema = new mongoose.Schema({
 
 const Analytics = mongoose.models.Analytics || mongoose.model('Analytics', analyticsSchema);
 const Click     = mongoose.models.Click     || mongoose.model('Click', clickSchema);
-const Url       = mongoose.models.Url || mongoose.model('Url', new mongoose.Schema(
-  {
-    code: {
-      type: String,
-      required: true,
-      index: true,
-    },
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: true,
-      index: true,
-    },
-    title: {
-      type: String,
-      default: '',
-    },
-    originalUrl: {
-      type: String,
-      default: '',
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-  },
-  { collection: 'urls' }
-));
 
 function redactIp(ip) {
   if (!ip) return '';
@@ -156,7 +130,7 @@ export async function getAnalytics(code, userId, filters = {}) {
   };
 
   // Get the 10 most recent raw click events (separate query for simplicity/readability)
-  result.recentClicks = await Click.find({ code })
+  result.recentClicks = await Click.find(match)
     .sort({ clickedAt: -1 })
     .limit(10)
     .lean()
